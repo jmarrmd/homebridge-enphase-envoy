@@ -96,7 +96,7 @@ export const ApiUrls = {
     "SendPhaseInformation": "/ivp/ss/sys_phase_balance",
     "SetTimezone": "/admin/lib/date_time_display.json",
     "SystemReadingStats": "/production.json?details=1",
-    "TariffSettingsGetPut": "/admin/lib/tariff",
+    "TariffSettingsGetPut": "/admin/lib/tariff.json",
     "TunnelStateGetPut": "/admin/lib/dba.json",
     "UpdateMeterConfig": "/ivp/meters/EID",
     "UpdateMeterCurrentCTConfig": "/ivp/meters/cts/EID",

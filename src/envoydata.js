@@ -2611,11 +2611,14 @@ class EnvoyData extends EventEmitter {
             tariff.storage_settings.mode = profile;
             tariff.storage_settings.reserved_soc = reservedSoc;
             tariff.storage_settings.charge_from_grid = chargeFromGrid;
-            tariff.single_rate = {
+
+            // Only fill in a default rate/season structure when the device has none configured yet.
+            // Never overwrite an existing user-configured tariff/rate structure.
+            tariff.single_rate ??= {
                 rate: 0.25,
                 sell: 0.25
             };
-            tariff.seasons = [
+            tariff.seasons ??= [
                 {
                     "id": "all_year_long",
                     "start": "1/1",
@@ -2650,7 +2653,7 @@ class EnvoyData extends EventEmitter {
                     "tiers": []
                 }
             ];
-            tariff.seasons_sell = [
+            tariff.seasons_sell ??= [
                 {
                     "id": "all_year_long",
                     "start": "1/1", "days": [

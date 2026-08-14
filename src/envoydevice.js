@@ -2291,7 +2291,6 @@ class EnvoyDevice extends EventEmitter {
                                     if (this.enchargeProfileControls.length > 0) {
                                         if (this.logDebug) this.emit('debug', `Prepare ${enchargeName} Profile Control Services`);
 
-                                        const enchargeSettings = this.pv.inventoryData.esubs.encharges.tariff.storageSettings;
                                         this.enchargeProfileControlsServices = [];
 
                                         for (let i = 0; i < this.enchargeProfileControls.length; i++) {
@@ -2322,7 +2321,7 @@ class EnvoyDevice extends EventEmitter {
                                                             return;
                                                         }
 
-                                                        await this.envoyData.setEnchargeProfile(profile, enchargeSettings.reservedSoc, control.chargeFromGrid);
+                                                        await this.envoyData.setEnchargeProfile(profile, control.reservedSoc, control.chargeFromGrid);
                                                         if (this.logDebug) this.emit('debug', `${enchargeName} set profile: ${name}, charge from grid: ${control.chargeFromGrid ? 'ON' : 'OFF'}`);
                                                     } catch (error) {
                                                         if (this.logWarn) this.emit('warn', `${enchargeName} set profile: ${profile}, error: ${error}`);

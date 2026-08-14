@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For plugin >= v10.4.0 use Homebridge UI >= v5.13.0
 - after update to v10.0.0 and above the accessory and bridge need to be removed from the homebridge / Home.app and added again
 
+## [10.7.7] - (14.08.2026)
+
+### Fixed
+
+- Encharge profile control (`setEnchargeProfile`): the tariff object PUT to `/admin/lib/tariff.json` had its `single_rate`, `seasons` and `seasons_sell` fields unconditionally overwritten with hardcoded placeholder rates before every write; toggling an Encharge profile switch or moving the reserved-SoC slider in HomeKit silently discarded the user's real tariff/rate structure configured in Enlighten (Single Rate or Time-of-Use with seasons/peak hours/tiers); those fields are now only filled with the placeholder default when the device has no tariff configured yet (`??=`), otherwise the existing configuration is preserved
+- Encharge profile control: the profile switch `.onSet` handler read `reservedSoc` from a reference (`enchargeSettings`) captured once at accessory-setup time; the periodic ensemble update replaces the tariff object wholesale rather than mutating it in place, so this reference never reflected later changes — toggling the profile switch (without touching the reserved-SoC slider) sent a stale, startup-time reserved-SoC value and could silently revert a value the user had changed since; the handler now reads the live, continuously-updated `control.reservedSoc` instead, matching the slider's handler
+
 ## [10.7.6] - (31.07.2026)
 
 ### Fixed

@@ -1,21 +1,21 @@
 {
     "private": false,
-    "displayName": "Enphase Envoy",
-    "name": "homebridge-enphase-envoy",
-    "version": "10.7.7",
-    "description": "Homebridge plugin for Photovoltaic Energy System manufactured by Enphase.",
+    "displayName": "Enphase Envoy Matter",
+    "name": "homebridge-enphase-envoy-matter",
+    "version": "1.0.0",
+    "description": "Homebridge plugin publishing Enphase Envoy solar production and home consumption as Matter energy sensors for the Apple Home Energy view.",
     "license": "MIT",
     "author": "grzegorz914",
-    "maintainers": [
-        "grzegorz914"
+    "contributors": [
+        "jmarrmd"
     ],
-    "homepage": "https://github.com/grzegorz914/homebridge-enphase-envoy#readme",
+    "homepage": "https://github.com/jmarrmd/homebridge-enphase-envoy#readme",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/grzegorz914/homebridge-enphase-envoy.git"
+        "url": "git+https://github.com/jmarrmd/homebridge-enphase-envoy.git"
     },
     "bugs": {
-        "url": "https://github.com/grzegorz914/homebridge-enphase-envoy/issues"
+        "url": "https://github.com/jmarrmd/homebridge-enphase-envoy/issues"
     },
     "type": "module",
     "exports": {
@@ -31,35 +31,27 @@
         "LICENSE"
     ],
     "engines": {
-        "homebridge": "^1.8.0 || ^2.0.0",
+        "homebridge": "^2.4.0",
         "node": "^20 || ^22 || ^24 || ^25 || ^26"
     },
     "dependencies": {
-        "mqtt": "^5.15.2",
         "axios": "^1.19.0",
-        "express": "^5.2.1",
-        "fast-xml-parser": "^5.10.1",
-        "fakegato-history": "^0.6.7",
-        "node-cron": "^4.6.0"
+        "fast-xml-parser": "^5.10.1"
     },
     "keywords": [
         "homebridge",
         "homebridge-plugin",
+        "matter",
         "envoy",
         "enphase",
-        "ensemble",
-        "enpower",
-        "encharge",
         "photovoltaic",
         "solar",
-        "mqtt",
-        "restful"
+        "energy"
     ],
     "funding": {
         "type": "Buy Coffee To",
         "url": "https://buycoffee.to/grzegorz914"
     },
-    "contributors": [],
     "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1"
     }

@@ -1,365 +1,128 @@
 <p align="center">
-  <a href="https://github.com/grzegorz914/homebridge-enphase-envoy"><img src="https://raw.githubusercontent.com/grzegorz914/homebridge-enphase-envoy/main/graphics/homebridge-enphase-envoy.png" width="540"></a>
+  <a href="https://github.com/grzegorz914/homebridge-enphase-envoy"><img src="https://raw.githubusercontent.com/grzegorz914/homebridge-enphase-envoy/main/graphics/envoy.png" width="540"></a>
 </p>
 
 <span align="center">
 
 # Homebridge Enphase Envoy
 
-[![verified-by-homebridge](https://img.shields.io/badge/homebridge-verified-purple)](https://github.com/homebridge/homebridge/wiki/Verified-Plugins)
-[![npm](https://shields.io/npm/dt/homebridge-enphase-envoy?color=purple)](https://www.npmjs.com/package/homebridge-enphase-envoy)
-[![npm](https://shields.io/npm/v/homebridge-enphase-envoy?color=purple)](https://www.npmjs.com/package/homebridge-enphase-envoy)
-[![npm](https://img.shields.io/npm/v/homebridge-enphase-envoy/beta.svg?style=flat-square)](https://www.npmjs.com/package/homebridge-enphase-envoy)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/grzegorz914/homebridge-enphase-envoy.svg)](https://github.com/grzegorz914/homebridge-enphase-envoy/pulls)
-[![GitHub issues](https://img.shields.io/github/issues/grzegorz914/homebridge-enphase-envoy.svg)](https://github.com/grzegorz914/homebridge-enphase-envoy/issues)
+[![npm](https://badgen.net/npm/dt/homebridge-enphase-envoy?color=purple)](https://www.npmjs.com/package/homebridge-enphase-envoy)
+[![npm](https://badgen.net/npm/v/homebridge-enphase-envoy?color=purple)](https://www.npmjs.com/package/homebridge-enphase-envoy)
 
-<a href="https://buycoffee.to/grzegorz914" target="_blank"><img src="https://raw.githubusercontent.com/grzegorz914/homebridge-enphase-envoy/main/graphics/buycoffee-button.png" style="width: 234px; height: 61px" alt="Supports My Work"></a> <a href="https://github.com/grzegorz914/homebridge-enphase-envoy"><img src="https://raw.githubusercontent.com/grzegorz914/homebridge-enphase-envoy/main/graphics/QR_buycoffee.png" width="61"></a>
+Homebridge plugin that publishes **solar production** and **home consumption** from an Enphase Envoy / IQ Gateway as **Matter electrical sensors**, so they appear in the Apple Home **Energy** view on iOS 27 and later.
 
 </span>
 
-## Package Requirements
+## What this plugin does
 
-| Package | Installation | Role | Required |
-| --- | --- | --- | --- |
-| [Homebridge v2.0.0](https://github.com/homebridge/homebridge) | [Homebridge Wiki](https://github.com/homebridge/homebridge/wiki) | HomeKit Bridge | Required |
-| [Homebridge UI](https://github.com/homebridge/homebridge-config-ui-x) | [Homebridge UI Wiki](https://github.com/homebridge/homebridge-config-ui-x/wiki) | Homebridge Web User Interface | Required |
-| [Enphase Envoy](https://www.npmjs.com/package/homebridge-enphase-envoy) | [Plug-In Wiki](https://github.com/grzegorz914/homebridge-enphase-envoy/wiki) | Homebridge Plug-In | Required |
+It exposes exactly two things per gateway:
 
-## Warning
+| Sensor | Matter device type | Reports |
+|--------|--------------------|---------|
+| Solar Production | ElectricalSensor (0x0510) | live watts, lifetime energy **exported** |
+| Home Consumption | ElectricalSensor (0x0510) | live watts, lifetime energy **imported** |
 
-* For plugin < v10.4.0 use Homebridge UI <= v5.5.0.
-* For plugin >= v10.4.0 use Homebridge UI >= v5.13.0.
+Import and export are relative to the endpoint: the PV array *delivers* energy, the house *draws* it. That distinction is what lets a controller tell a producer from a load.
 
-## About The Plugin
+### Why Matter and not HomeKit
 
-The plugin integrates Enphase Envoy solar energy monitoring systems with Homebridge, allowing HomeKit users to track solar production, consumption, and battery status directly in the Apple Home app. With real-time energy insights, automation possibilities, and Siri voice control, this plugin enhances smart home energy management by seamlessly connecting your Enphase Envoy system to the HomeKit ecosystem.
+Apple Home's Energy view is driven by Matter's `ElectricalPowerMeasurement` and `ElectricalEnergyMeasurement` clusters. Classic HomeKit (HAP) has no power or energy characteristic, so no arrangement of HAP services can populate that view — custom "Eve" characteristics only ever show up in Eve-class apps. This plugin therefore registers **no HomeKit accessories at all**; it publishes over Matter only.
 
-## Supported hardware
+## Requirements
 
-* Firmware v5 through v8
-* System/Enpower `Envoy S`, `IQ Gateway`, `IQ Load Controller`, `IQ Combiner Controller`
-* Q-Relays `Q-Relay 1P` `Q-Relay 3P`
-* AC Batteries `AC Battery`
-* Meters `Production`, `Consumption`, `Storage`, `Back Feed`, `EV Charger`, `PV 3P`, `Load`
-* Microinverters `M215`, `M250`, `IQ6`, `IQ7`, `IQ8`
-* Encharges `IQ Battery 3`, `IQ Battery 10`, `IQ Battery 5P`, `IQ Battery 3T`, `IQ Battery 10T`, `IQ Battery 10C`
-* WirelessKit `Communications Kit 1/2`
-* Generator
+- **Homebridge 2.4.0 or later** — earlier builds have no `ElectricalSensor` Matter device type
+- **Matter enabled on this plugin's child bridge** — Homebridge UI → plugin settings → Bridge Settings → enable Matter
+- Node.js 20 or later
+- An Envoy / IQ Gateway on your local network, firmware v5 through v8
 
-## Exposed accessories in the Apple Home app
+Consumption requires consumption CTs installed on the gateway. Without them the plugin publishes the production sensor only and says so in the log.
 
-### Monitoring Sensors
+## Installation
 
-* System `Data Refresh`
-* Production `State`, `Power State`, `Power Level`, `Energy State`, `Energy Level`, `Current`, `Voltage`, `Frequency`, `Power Factor`
-* Consumption `Power State`, `Power Level`, `Energy State`, `Energy Level`, `Current`, `Voltage`, `Frequency`, `Power Factor`
-* Q-Relay `State`
-* Enpower `Grid State`
-* Encharge: `State`, `Grid State`, `Backup Level`, `Dry Contacts`
-* Solar `Grid State`
-* Encharge Profile: `Self Consumption`, `Savings`, `Economy`, `Full Backup`
-* Grid:
-  * Mode:
-    * Enpower `Grid On`, `Grid Off`, `Multimode Grid On`, `Multimode Grid Off`, `Grid Tied`, `Grid Forming`
-    * Encharge `Grid On`, `Grid Off`, `Multimode Grid On`, `Multimode Grid Off`, `Grid Tied`, `Grid Forming`
-    * Solar `Grid On`, `Grid Off`, `Multimode Grid On`, `Multimode Grid Off`, `Grid Tied`, `Grid Forming`
-  * Quality:
-    * Production `Current (A)`, `Voltage (V)`, `Power Factor (cos Fi)`, `Frequency (Hz)`
-    * Consumption Total `Current (A)`, `Voltage (V)`, `Power Factor (cos Fi)`, `Frequency (Hz)`,
-    * Consumption Net `Current (A)`, `Voltage (V)`, `Power Factor (cos Fi)`, `Frequency (Hz)`,
-* Generator `State`, `Mode`
+Install through the Homebridge UI, or:
 
-### Control Switches, Outlets, Lightbulbs
+```bash
+npm install -g homebridge-enphase-envoy
+```
 
-* System `Data Refresh`, `Lock Control`
-* Production `State`, `Power Mode`, `Power State`, `Power Level`
-* AC Battery `Energy State`, `Backup Level Summary`, `Backup Level`
-* Enpower `Grid State`, `Dry Contacts`
-* Encharge `Energy State Summary`, `Backup Level Summary`, `Energy State`,  `Backup Level`
-* Encharge Profile
-  * Self Consumption `Activate`, `Set Reserve`
-  * Savings `Activate`, `Set Reserve`
-  * Economy `Activate`, `Set Reserve`
-  * Full Backup `Activate`
-* Generator `State`, `Mode`
-* PLC Level `State`
+Then enable Matter on the plugin's child bridge and restart Homebridge. Pair the Matter bridge with the Home app if you have not already.
 
-## Notes
+## Configuration
 
-* Token authentication (v7.0+) - Tokens can be generated automatically with the Enlighten username (email address) and password or external tools. Tokens generated with Enlighten credentials are automatically refreshed while those generated with external tools are not.
-* Envoy `password` is detected automatically or can be added in the configuration if already changed by user.
-* Installer `password` is generated automatically (firmware < v7.0+).
-* Envoy `device ID` is detected automatically.
-* Supports [Production State Conrol](https://github.com/grzegorz914/homebridge-enphase-envoy/wiki#power-production-control) and `PLC Level Check` (firmware v7.0+ requires installer credentials).
-* For the best experience and to display all data, please use the `Controller` or `Eve` apps.
-* External integrations include: [REST](https://github.com/grzegorz914/homebridge-enphase-envoy?tab=readme-ov-file#restful-integration) and [MQTT](https://github.com/grzegorz914/homebridge-enphase-envoy?tab=readme-ov-file#mqtt-integration).
+Configure through the Homebridge UI, or add a platform block by hand:
 
-### Configuration
+```json
+{
+  "platforms": [
+    {
+      "platform": "enphaseEnvoy",
+      "devices": [
+        {
+          "name": "Envoy",
+          "host": "192.168.1.35",
+          "envoyFirmware7xxTokenGenerationMode": 1,
+          "enlightenUser": "user@example.com",
+          "enlightenPasswd": "password",
+          "refreshInterval": 30
+        }
+      ]
+    }
+  ]
+}
+```
 
-* Running this plugin as a [Child Bridge](https://github.com/homebridge/homebridge/wiki/Child-Bridges) is **highly recommended**. This prevents Homebridge from crashing if the plugin crashes.
-* Installation and use of [Homebridge UI](https://github.com/homebridge/homebridge-config-ui-x) to configure this plugin.
-* The `sample-config.json` can be edited and used as an alternative for advanced users.
+| Key | Default | Description |
+|-----|---------|-------------|
+| `name` | — | **Required.** Name for the gateway; prefixes the sensor names. |
+| `host` | `envoy.local` | Hostname or IP address of the gateway. |
+| `envoyFirmware7xxTokenGenerationMode` | `0` | `0` no token (firmware v5/v6), `1` generate a token from Enlighten credentials, `2` use a token you supply. |
+| `enlightenUser` / `enlightenPasswd` | — | Enlighten account, required for mode `1`. |
+| `envoyToken` | — | A JWT from [entrez.enphaseenergy.com](https://entrez.enphaseenergy.com), required for mode `2`. |
+| `envoyPasswd` | last 6 of serial | Only for firmware v5/v6, if the gateway password is non-default. |
+| `productionEnabled` | `true` | Publish the solar production sensor. |
+| `productionName` | `<name> Solar Production` | Name of the production sensor. |
+| `consumptionEnabled` | `true` | Publish the home consumption sensor. |
+| `consumptionName` | `<name> Home Consumption` | Name of the consumption sensor. |
+| `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
+| `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
 
-<p align="center">
-  <a href="https://github.com/grzegorz914/homebridge-enphase-envoy"><img src="https://raw.githubusercontent.com/grzegorz914/homebridge-enphase-envoy/main/graphics/ustawienia.png" width="840"></a>
-</p>
+Multiple gateways are supported — add more entries to `devices`.
 
-| Key | Subkey | Type | Description |
-| --- | --- | --- | --- |
-| `name` | | string | Envoy Enphase Gateway accessory name to be displayed in Home app |
-| `host` | | string | The Envoy Enphase Gateway `IP Address` or `Hostname`. If not supplied, defaults to `envoy.local`. For firmware v7.0+, please set the `IP Address`. |
-| `displayType` | | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Light Bulb, `2` - Fan, `3` - Humidity Sensor, `4` - Carbon Monoxide Sensor |
-| `envoyFirmware7xxTokenGenerationMode` | | number | How you will obtain the token: `0` - Envoy Password (firmware < v7.0), `1` - Enlighten Credentials, `2` - Your Own Generated Token |
-| `envoyPasswd` | | string | Envoy password (only if U already changed the default password) ||
-| `enlightenUser` | | string | Enlighten username |
-| `enlightenPasswd` | | string | Enlighten password |
-| `envoyToken` | | string | Token if you selected `2 - Your Own Generated Token` for envoyFirmware7xxTokenGenerationMode |
-| `envoyTokenInstaller` | | boolean | Enable if you are using the installer token |
-| `lockControl` | | key | `Lock Control` for enable?disable system control |
-| | `lockControl.enable` | boolean | Enables system control auto lock accessory |
-| | `lockControl.time` | number | `System Auto Lock Control` time (seconds) |
-| | `lockControl.namePrefix` | boolean | Use accessory name for prefix |
-| `energyMeter` | | boolean | Enables energy meter as a axtra accessory to display charts in EVE app |
-| `energyHistoryTime` | | number | Time in years for which energy history data is retained. `0` - no time limit, all data is saved |
-| `energyHistoryReserveSpace` | | number | Minimum free disk space in `GB` to maintain. When free space falls below this value, the oldest history records are deleted to free up storage. `0` - disable |
-| `productionStateSensor` | | key | `Production State Sensor` for production state monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `plcLevelControl` | | key | `PLC Level Control` for PLC level check (firmware v7.0+ require installer credentials) |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type for Home app: `0` - None/Disabled, `1` - Switch, `2` - Outlet, `3` - Lightbulb |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `powerProductionSummary` | | number | `Power Summary`, in `W`, of all microinverters. This will be used to calculate the display power level in the Home app `0-100 %` |
-| `powerProductionLevelSensors` | | key | `Power Level Sensor` for production monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode: `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `powerLevel` | number | Power production level in `W` to compare to sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `energyProductionLifetimeOffset` | | number | `Energy Offset` in `Wh` for production (if needed) `+/-` |
-| `energyProductionLevelSensors` | | key | `Energy Level Sensor` for production monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode: `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `energyLevel` | number | Energy production level in `Wh` to compare to sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `gridProductionQualitySensors` | | key | `Power Level Sensor` for production monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode: `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `compareType` | string | Comparison type: `Current`, `Voltage`, `Frequency`, `Power Factor` |
-| | `compareLevel` | number | Level to compare to sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `powerConsumptionTotalLevelSensors` | | key | `Power Level Sensor` for total consumption monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `powerLevel` | number | Total power consumption level in `W` to compare to power level sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `energyConsumptionTotalLifetimeOffset` | | number | `Energy Offset` in `Wh` for total consumption (if needed) `+/-` |
-| `energyConsumptionTotalLevelSensors` | | key | `Energy Level Sensor` for total consumption monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `energyLevel` | number | Energy level total in `Wh` to compare to sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `gridConsumptionTotalQualitySensors` | | key | `Power Level Sensor` for production monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode: `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `compareType` | string | Comparison type: `Current`, `Voltage`, `Frequency`, `Power Factor` |
-| | `compareLevel` | number | Level to compare to sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `powerConsumptionNetLevelSensors` | | key | `Power Level Sensor` for net power consumption level monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `powerLevel` | number | Net power consumption power level in `W` to compare for the sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `energyConsumptionNetLifetimeOffset` | | number | `Energy Offset` in `Wh` for consumption `Net` (if needed) `+/-` |
-| `energyConsumptionNetLevelSensors` | | key | `Energy Level Sensor` for net consumption monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `energyLevel` | number | Net energy comsumption level in `Wh` to compare to sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `gridConsumptionNetQualitySensors` | | key | `Power Level Sensor` for production monitoring |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode: `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| | `compareType` | string | Comparison type: `Current`, `Voltage`, `Frequency`, `Power Factor` |
-| | `compareLevel` | number | Level to compare to sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `qRelayStateSensor` | | key | `Q-Relay State Sensor` for monitoring. If `State ON`, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| | `multiphase` | boolean | Enables multiphase support, if present |
-| `acBatterieName` | | string | AC Bettery Accessory name for Home app, if not set will use default name |
-| `acBatterieBackupLevelSummaryAccessory` | | key | `AC Batteries Backup Level Summary Accessory` in Home app, if present |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Light Bulb, `2` - Fan, `3` - Humidity Sensor, `4` - Carbon Monoxide Sensor, `5` - Battery |
-| | `minSoc` | boolean | Minimum SoC level in (%) for ac batteries backup level summary |
-| `acBatterieBackupLevelAccessory` | | key | `AC Battery Backup Level Accessory` in Home app, if present |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Light Bulb, `2` - Fan, `3` - Humidity Sensor, `4` - Carbon Monoxide Sensor, `5` - Battery |
-| | `minSoc` | boolean | Minimum SoC level in (%) for ac battery backup level |
-| `enpowerGridStateControl` | | key | `Enpower Grid State Control` for `Grid ON/OFF` control from HomeKit |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Switch, `2` - Outlet, `3` - Lightbulb |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enepowerGridStateSensor` | | key | `Enpower Grid State Sensor` for monitoring. If `Grid ON`, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enpowerGridModeSensors` | | key | `Enpower Grid Mode Sensors` for monitoring. If the `Mode` matches, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `gridMode` | string | Grid mode: `Grid On`, `Grid Off`, `Multimode Grid On`, `Multimode Grid Off`, `Grid Tied`, `Grid Forming` |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enchargeName` | | string | Encharge Accessory name for Home app, if not set will use default name |
-| `enchargeBackupLevelSummaryAccessory` | | key | `Encharge Backup Level Summary Accessory` in Home app, if present |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Light Bulb, `2` - Fan, `3` - Humidity Sensor, `4` - Carbon Monoxide Sensor, `5` - Battery |
-| | `minSoc` | boolean | Minimum SoC level in (%) for encharges backup level summary |
-| `enchargeBackupLevelAccessory` | | key | `Encharge Backup Level Accessory` in Home app, if present |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, , `1` - Battery |
-| | `minSoc` | boolean | Minimum SoC level in (%) for encharges backup level summary |
-| `enchargeStateSensor` | | key | `Encharge State Sensor` for monitoring. If `State ON`, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enchargeProfileControls` | | key | `Encharge Profile Controls` for `Profile` control from HomeKit |
-| | `name` | string | Accessory name for Home app |
-| | `profile` | string | Profile: `Savings`, `Economy`, `Full Backup`, `Self Consumption` |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Lightbulb |
-| | `chargeFromGrid` | boolean | Allow charge from grid  |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enchargeProfileSensors` | | key | `Encharge Profile Sensors` for monitoring. If the `Profile` matches, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `profile` | string | Profile: `Savings`, `Economy`, `Full Backup`, `Self Consumption` |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enechargeGridStateSensor` | | key | `Encharge Grid State Sensor` for monitoring. If `Grid ON`, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enchargeGridModeSensors` | | key | `Encharge Grid Mode Sensors` for monitoring. If the `Mode` matches, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `gridMode` | string | Grid mode: `Multimode Grid On`, `Multimode Grid Off` |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enchargeBackupLevelSensors` | | key | `Encharge Backup Level Sensors` for monitoring. If the `Level` matches, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `compareMode` | string | Comparison mode: `<`, `<=`, `==`, `>`, `>=` |
-| | `backupLevel` | number | Backup level in `%` to compare to sensor that was triggered |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `solarGridStateSensor` | | key | `Solar Grid State Sensor` for monitoring. If `Grid ON`, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `solarGridModeSensors` | | key | `Solar Grid Mode Sensors` for monitoring. If the `Mode` matches, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `gridMode` | string | Grid mode: `Grid On`, `Grid Off`, `Multimode Grid On`, `Multimode Grid Off`, `Grid Tied`, `Grid Forming` |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `enpowerDryContactsControl` | | boolean | Enables `Dry Contacts` control and exposes `Switches` in Home app |
-| `enpowerDryContactsSensor` | | boolean | Enables `Dry Contacts` monitoring and exposes `Sensors` in Home app |
-| `generatorStateControl` | | key | `Generator State Control` for `Generator OFF/ON` control in Home app |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Switch, `2` - Outlet, `3` - Lightbulb |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `generatorStateSensor` | | key | `Generator State Sensor` for `State` monitoring. If `State not Off`, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `generatorModeContol` | | key | `Generator Mode Control`, for `Generator OFF/ON/AUTO` control in Home app |
-| | `name` | string | Accessory name for Home app |
-| | `mode` | string | Grid mode: `Off`, `On`, `Auto` |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Switch, `2` - Outlet, `3` - Lightbulb |
-| `generatorModeSensors` | | key | `Generator Mode Sensors` for monitoring, if the `Mode` matches, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `mode` | string | Grid mode: `Off`, `On`, `Auto` |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `acBatterieBackupLevelAccessory` | | key | `AC Battery Backup Level Accessory` in Home app, if present |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, , `1` - Battery |
-| | `minSoc` | boolean | Minimum SoC level in (%) for ac battery backup level summary |
-| `dataRefreshControl` | | key | `Data Refresh Control` from HomeKit. |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Here select the tile type to be displayed in Home app: `0` - None/Disabled, `1` - Switch, `2` - Outlet, `3` - Lightbulb |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `dataRefreshSensor` | | key | `Data Refresh Sensor` for monitoring. If operating, the contact was opened. |
-| | `name` | string | Accessory name for Home app |
-| | `displayType` | number | Accessory type to be displayed in Home app: `0` - None/Disabled, `1` - Motion Sensor, `2` - Occupancy Sensor, `3` - Contact Sensor |
-| | `namePrefix` | boolean | Use accessory name for prefix |
-| `productionDataRefreshTime` | | number | `Production Data` refresh time (seconds) |
-| `liveDataRefreshTime` | | number | `Live Data` refresh time (seconds) |
-| `ensembleDataRefreshTime` | | number | `Ensemble Data` refresh time (seconds) |
-| `log` | | key | `Log` from HomeKit. |
-| | `deviceInfo` | boolean | If enabled, log device info will be displayed by every connections device to the network. |
-| | `success` | boolean | If enabled, success log will be displayed in console. |
-| | `info` | boolean | If enabled, info log will be displayed in console. |
-| | `warn` | boolean | If enabled, warn log will be displayed in console. |
-| | `error` | boolean | If enabled, error log will be displayed in console. |
-| | `debug` | boolean | If enabled, debug log will be displayed in console. |
-| `restFul` | | key | REST service |
-| | `enable` | boolean | Enables REST service to start automatically and respond to any request |
-| | `port` | number | `Port` for REST service |
-| `mqtt` | | key | MQTT broker |
-| | `enable` | boolean | Enables MQTT broker to start automatically and publish available data |
-| | `host` | string | `IP Address` or `Hostname` for MQTT Broker |
-| | `port` | number | `Port` for MQTT broker (default to 1883) |
-| | `clientId` | string | `Client Id` of MQTT broker (optional) |
-| | `prefix` | string | `Prefix` for `Topic` (optional) |
-| | `auth` | boolean | Enables MQTT broker authorization credentials |
-| | `user` | string | MQTT broker user |
-| | `passwd` | string | MQTT Broker password |
+### Authentication
 
-### REST Integration
+- **Firmware v5/v6** — no token. Most gateways serve the data endpoints unauthenticated; if yours challenges, the plugin answers with HTTP Digest using the `envoy` account and the last six digits of the serial number (override with `envoyPasswd`).
+- **Firmware v7 and later** — a JWT is required. Mode `1` mints one from your Enlighten credentials and caches it under Homebridge's storage path, renewing it an hour before expiry. Mode `2` uses a token you generated yourself.
 
-REST POST calls must include a content-type header of `application/json`.
-Path `pv` response all available data.
-Path `status` response all available paths.
+The plugin detects which is needed from `/info.xml`, and falls back to the other URL scheme if the configured one is unreachable.
 
-Energy history stored every 1 minute at `:00` second and at `23:59:59` each day.
-Missing records are filled with `null` values; interval fields (`prit`, `cnit`, `ctit`) for gap records are distributed evenly across the gap when data resumes.
-Retention is controlled by `energyHistoryTime` and `energyHistoryReserveSpace` settings:
-`ts - timestamp`, `pr - production lifetime`, `prit - production interval Wh between records (same day only, evenly distributed across gaps)`, `prt - production today`, `pru - production lifetime upload`, `prut - production today upload`, `cn - consumption net lifetime`, `cnit - net consumption interval Wh between records (same day only, evenly distributed across gaps)`, `cnt - consumption net today`, `cnu - consumption net lifetime upload`, `cnut - consumption net today upload`, `ct - consumption total lifetime`, `ctit - total consumption interval Wh between records (same day only, evenly distributed across gaps)`, `ctt - consumption total today`, `ctp - consumption total lifetime from pv`, `ctpt - consumption total today from pv`
+## How readings are sourced
 
-| Method | URL | Path | Response | Type |
-| --- | --- | --- | --- | --- |
-| GET | `http//ip:port` | `pv`, `token`, `info`, `home`, `homedata`, `inventory`, `inventorybyserialnumber`, `microinvertersstatus`, `meters`, `metersreading`, `metersreports`, `detaileddevicesdata`, `detaileddevicesdatabyserialnumber`, `microinvertersdata`, `qrelaysdata`, `metersdata`, `production`, `productionpdm`, `energypdm`, `productionct`, `powerandenergydata`, `energyhistory`, `acbatterydata`, `ensembleinventory`, `ensemblestatus`, `ensemblepower`, `enchargesettings`, `tariff`, `drycontacts`, `drycontactssettings`, `generator`, `generatorsettings`, `ensembledata`, `gridprofile`, `livedata`, `livedatadata`, `productionstate`, `plclevel`, `datasampling`. | `{wNow: 2353}` | JSON |
+The plugin reads `/production.json?details=1`, which returns production and consumption in a single call:
 
-| Method | URL | Key | Value | Type | Description |
-| --- | --- | --- | --- | --- | --- |
-| POST | `http//ip:port` | `DataSampling` | `true`, `false` | boolean | Data sampling Start/Stop |
-|      | `http//ip:port` | `PowerProductionState` | `true`, `false` | boolean | Production state On/Off |
-|      | `http//ip:port` | `PlcLevel` | `true` | boolean | Check Plc Level On |
-|      | `http//ip:port` | `EnchargeProfile` | `self-consumption`, `savings-mode`, `economy`, `backup` | string | Set encharge profile |
-|      | `http//ip:port` | `EnchargeReservedSoc` | `0-100` | number | Set encharge reserve SoC 0-100% |
-|      | `http//ip:port` | `EnchargeChargeFromGrid` | `true`, `false` | boolean | Set encharge charge from grid On/Off |
-|      | `http//ip:port` | `EnpowerGridState` | `true`, `false` | boolean | Grid state On/Off |
-|      | `http//ip:port` | `GeneratorMode` | `off`, `on`, `auto` | string | Generator mode Off/On/Auto |
+- **Production** comes from the production CT (`eim`) when one is installed and reporting, otherwise from the microinverters' own reports (`inverters`).
+- **Consumption** comes from the `total-consumption` CT. On a gateway wired for net metering only, house load is reconstructed as `production + net-consumption`.
+- If `/production.json` is unavailable the plugin falls back to `/api/v1/production`, which reports production only.
 
-### MQTT Integration
+Lifetime energy counters are held at their high-water mark, since Matter treats cumulative energy as monotonic and a momentary dip in a gateway reading would otherwise surface as a bogus spike in the Home app.
 
-Subscribe using JSON `{ "EnchargeProfile": "savings" }`
-Energy history stored every 1 minute at `:00` second and at `23:59:59` each day.
-Missing records are filled with `null` values; interval fields (`prit`, `cnit`, `ctit`) for gap records are distributed evenly across the gap when data resumes.
-Retention is controlled by `energyHistoryTime` and `energyHistoryReserveSpace` settings:
-`ts - timestamp`, `pr - production lifetime`, `prit - production interval Wh between records (same day only, evenly distributed across gaps)`, `prt - production today`, `pru - production lifetime upload`, `prut - production today upload`, `cn - consumption net lifetime`, `cnit - net consumption interval Wh between records (same day only, evenly distributed across gaps)`, `cnt - consumption net today`, `cnu - consumption net lifetime upload`, `cnut - consumption net today upload`, `ct - consumption total lifetime`, `ctit - total consumption interval Wh between records (same day only, evenly distributed across gaps)`, `ctt - consumption total today`, `ctp - consumption total lifetime from pv`, `ctpt - consumption total today from pv`
+Live power is pushed on every poll. Cumulative energy is pushed at most once a minute — Matter delivers energy updates as events to every subscribed controller without throttling, so a faster cadence is just noise.
 
-| Method | Topic | Message | Type |
-| --- | --- | --- | --- |
-| Publish | `Token`, `Info`, `Home`, `Home Data`, `Inventory`, `Inventory By Serial Number`, `Microinverters Status`, `Meters`, `Meters Reading`, `Meters Reports`, `Detailed Devices Data`, `Detailed Devices Data By Serial Number`, `Microinverters Data`, `Q-Relays Data`, `Meters Data`, `Production`, `Production Pdm`, `Energy Pdm`, `Production CT`, `Power And Energy Data`, `Energy History`, `AC Battery Data`, `Ensemble Inventory`, `Ensemble Status`, `Ensemble Status`, `Encharge Power`, `Tariff`, `Dry Contacts`, `Dry Contacts Settings`, `Generator`, `Generator Settings`, `Ensemble Data`, `Grid Profile`, `Live Data`, `Live Data Data`, `Production State`, `PLC Level`, `Data Sampling` | `{wNow: 2353}` | JSON |
+## Upgrading from v10
 
-| Method | Topic | Key | Value | Type | Description |
-| --- | --- | --- | --- | --- | --- |
-| Subscribe | `Set` | `DataSampling` | `true`, `false` | boolean | Data sampling Start/Stop |
-|           | `Set` | `ProductionState` | `true`, `false` | boolean | Production state On/Off |
-|           | `Set` | `PlcLevel` | `true` | boolean | Check Plc Level On |
-|           | `Set` | `EnchargeProfile` | `self-consumption`, `savings-mode`, `economy`, `backup` | string | Set encharge profile |
-|           | `Set` | `EnchargeReservedSoc` | `0-100` | number | Set encharge reserve SoC 0-100% |
-|           | `Set` | `EnchargeChargeFromGrid` | `true`, `false` | boolean | Set encharge charge from grid On/Off |
-|           | `Set` | `EnpowerGridState` | `true`, `false` | boolean | Grid state On/Off |
-|           | `Set` | `GeneratorMode` | `off`, `on`, `auto` | string | Generator mode Off/On/Auto |
+v11 is a deliberate reduction in scope. The plugin previously exposed inverters, batteries, Ensemble/Enpower/Encharge devices, meters, grid profiles, production switches, and MQTT/REST integrations as HomeKit accessories. All of that is gone; only the two Matter energy sensors remain.
+
+On first run v11 removes the HomeKit accessories cached by earlier versions. Configuration keys for the gateway address and authentication are unchanged, so those parts of an existing config keep working — everything else is ignored.
+
+If you need the full accessory tree, stay on [v10.7.7](https://www.npmjs.com/package/homebridge-enphase-envoy/v/10.7.7).
+
+## Troubleshooting
+
+**"Matter export disabled: api.matter is unavailable"** — Matter is not enabled on this plugin's child bridge, or Homebridge is older than 2.4.0. Enable Matter in the plugin's Bridge Settings and restart.
+
+**Sensors appear but show no energy history** — the Energy view builds history over time from the cumulative counters; it will not backfill.
+
+**"Gateway reports no consumption data"** — your gateway has no consumption CTs installed. Only the production sensor can be published.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

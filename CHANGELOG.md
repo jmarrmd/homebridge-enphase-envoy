@@ -7,9 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Warning
 
+- v11.0.0 is a Matter-only rewrite with a much smaller scope — see the entry below before updating
+- For plugin >= v11.0.0 use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - For plugin < v10.4.0 use Homebridge UI <= v5.5.0
 - For plugin >= v10.4.0 use Homebridge UI >= v5.13.0
 - after update to v10.0.0 and above the accessory and bridge need to be removed from the homebridge / Home.app and added again
+
+## [11.0.0] - (16.08.2026)
+
+### Changed - BREAKING
+
+- The plugin is now **Matter only** and publishes exactly two sensors per gateway: solar production and home consumption, both as Matter `ElectricalSensor` (0x0510) endpoints carrying `ElectricalPowerMeasurement` and `ElectricalEnergyMeasurement`. They surface in the Apple Home Energy view on iOS 27 and later.
+- Production reports lifetime energy as `cumulativeEnergyExported`, consumption as `cumulativeEnergyImported`, so controllers can tell the producer from the load.
+- No HomeKit/HAP accessories are registered any more. HAP has no power or energy characteristic, so it cannot drive the Energy view. Accessories cached by earlier versions are removed on first run.
+- Requires Homebridge >= v2.4.0 with Matter enabled on this plugin's child bridge. `api.matter` availability is feature-detected; when it is missing the plugin logs what to change instead of failing.
+
+### Removed
+
+- All accessories other than the two energy sensors: microinverters, Q-Relays, AC batteries, Encharge/Enpower/Ensemble/Collar/Generator, meters, live data, grid profile, PLC level, production state control, power/energy peak switches, sensors and level controls.
+- MQTT and RESTful integrations, Eve/fakegato history, and the custom HomeKit characteristics.
+- Installer-account access and the derived installer password (`passwdcalc.js`) — no endpoint used by this plugin needs it.
+- Dependencies `mqtt`, `express`, `fakegato-history` and `node-cron`; only `axios` and `fast-xml-parser` remain.
+
+### Changed
+
+- Readings come from `/production.json?details=1`, preferring the production CT over microinverter reports, with `/api/v1/production` as the fallback for gateways without CTs. On a net-metered gateway, house load is reconstructed as `production + net-consumption`.
+- Lifetime energy counters are held at their high-water mark, since Matter treats cumulative energy as monotonic.
+- Live power is pushed every poll; cumulative energy at most once a minute, because Matter delivers energy updates as unthrottled events to every subscribed controller.
+- Config is reduced to address, authentication, sensor names/toggles, refresh interval and log levels. Gateway address and authentication keys are unchanged from v10, so those parts of an existing config keep working.
+- `/info.xml` retries with the other URL scheme when the configured one is unreachable, so a mismatched token mode no longer makes the gateway unreachable.
 
 ## [10.7.7] - (14.08.2026)
 

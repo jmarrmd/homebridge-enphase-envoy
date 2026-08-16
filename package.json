@@ -2,8 +2,8 @@
     "private": false,
     "displayName": "Enphase Envoy",
     "name": "homebridge-enphase-envoy",
-    "version": "10.7.7",
-    "description": "Homebridge plugin for Photovoltaic Energy System manufactured by Enphase.",
+    "version": "11.0.0",
+    "description": "Homebridge plugin publishing Enphase Envoy solar production and home consumption as Matter energy sensors for the Apple Home Energy view.",
     "license": "MIT",
     "author": "grzegorz914",
     "maintainers": [
@@ -31,29 +31,22 @@
         "LICENSE"
     ],
     "engines": {
-        "homebridge": "^1.8.0 || ^2.0.0",
+        "homebridge": "^2.4.0",
         "node": "^20 || ^22 || ^24 || ^25 || ^26"
     },
     "dependencies": {
-        "mqtt": "^5.15.2",
         "axios": "^1.19.0",
-        "express": "^5.2.1",
-        "fast-xml-parser": "^5.10.1",
-        "fakegato-history": "^0.6.7",
-        "node-cron": "^4.6.0"
+        "fast-xml-parser": "^5.10.1"
     },
     "keywords": [
         "homebridge",
         "homebridge-plugin",
+        "matter",
         "envoy",
         "enphase",
-        "ensemble",
-        "enpower",
-        "encharge",
         "photovoltaic",
         "solar",
-        "mqtt",
-        "restful"
+        "energy"
     ],
     "funding": {
         "type": "Buy Coffee To",

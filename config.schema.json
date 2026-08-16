@@ -1,11 +1,11 @@
 {
-    "pluginAlias": "enphaseEnvoy",
+    "pluginAlias": "enphaseEnvoyMatter",
     "pluginType": "platform",
     "singular": true,
     "fixArrayDisplay": true,
     "customUi": false,
-    "headerDisplay": "Publishes Enphase Envoy / IQ Gateway solar production and home consumption as **Matter electrical sensors**, so they appear in the Apple Home Energy view on iOS 27 and later.\n\nThis plugin registers no HomeKit accessories. It requires **Homebridge 2.4.0 or later** with **Matter enabled on this plugin's child bridge** (Bridge Settings -> enable Matter).",
-    "footerDisplay": "For documentation please see the [GitHub repository](https://github.com/grzegorz914/homebridge-enphase-envoy).",
+    "headerDisplay": "Publishes Enphase Envoy / IQ Gateway solar production and home consumption as **Matter electrical sensors**, so they appear in the Apple Home Energy view on iOS 27 and later.\n\nThis plugin registers no HomeKit accessories. It requires **Homebridge 2.4.0 or later** with **Matter enabled on this plugin's child bridge** (Bridge Settings -> enable Matter).\n\nIt installs alongside `homebridge-enphase-envoy` and does not replace it — the two use separate plugin names, platform blocks and child bridges.",
+    "footerDisplay": "For documentation please see the [GitHub repository](https://github.com/jmarrmd/homebridge-enphase-envoy).",
     "schema": {
         "type": "object",
         "properties": {

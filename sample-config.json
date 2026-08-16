@@ -1,7 +1,7 @@
 {
     "platforms": [
         {
-            "platform": "enphaseEnvoy",
+            "platform": "enphaseEnvoyMatter",
             "devices": [
                 {
                     "name": "Envoy",

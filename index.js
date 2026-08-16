@@ -1,5 +1,5 @@
 /**
- * homebridge-enphase-envoy
+ * homebridge-enphase-envoy-matter
  *
  * Publishes solar production and home consumption from an Enphase Envoy /
  * IQ Gateway as Matter electrical sensors, so they show up in the Apple Home
@@ -7,13 +7,16 @@
  *
  * This plugin is Matter-only: it registers no HomeKit/HAP accessories, because
  * HAP has no power or energy characteristic that the Energy view reads.
+ *
+ * It is a separate package from homebridge-enphase-envoy and installs alongside
+ * it — see PluginName / PlatformName / StorageDir in src/constants.js.
  */
 
 import { join } from 'path';
 import { mkdirSync } from 'fs';
 import EnvoyClient, { TokenMode } from './src/envoyclient.js';
 import MatterEnergyBridge from './src/matterenergy.js';
-import { PluginName, PlatformName, MeasurementKind } from './src/constants.js';
+import { PluginName, PlatformName, StorageDir, MeasurementKind } from './src/constants.js';
 
 const DEFAULT_REFRESH_SECONDS = 30;
 const MIN_REFRESH_SECONDS = 5;
@@ -32,9 +35,11 @@ class EnvoyPlatform {
     }
 
     async launch() {
-        // Earlier versions of this plugin published a large tree of HAP
-        // accessories. It no longer registers any, so drop whatever Homebridge
-        // restored from the cache rather than leaving orphans in the Home app.
+        // This plugin registers no HAP accessories, so anything Homebridge
+        // restored for it is a leftover. Homebridge scopes both the cache and
+        // the unregister call to this plugin+platform pair, so this can only
+        // ever touch our own accessories — never those of the separate
+        // homebridge-enphase-envoy plugin running alongside us.
         this.purgeCachedAccessories();
 
         const devices = Array.isArray(this.config.devices) ? this.config.devices : [];
@@ -43,7 +48,7 @@ class EnvoyPlatform {
             return;
         }
 
-        const prefDir = join(this.api.user.storagePath(), 'enphaseEnvoy');
+        const prefDir = join(this.api.user.storagePath(), StorageDir);
         try {
             mkdirSync(prefDir, { recursive: true });
         } catch (error) {
@@ -59,7 +64,7 @@ class EnvoyPlatform {
     purgeCachedAccessories() {
         if (this.cachedAccessories.length === 0) return;
 
-        this.log.info(`Removing ${this.cachedAccessories.length} cached HomeKit accessory(ies) — this plugin now publishes over Matter only.`);
+        this.log.info(`Removing ${this.cachedAccessories.length} stale cached HomeKit accessory(ies) — this plugin publishes over Matter only.`);
         this.api.unregisterPlatformAccessories(PluginName, PlatformName, this.cachedAccessories);
         this.cachedAccessories = [];
     }

@@ -1,17 +1,12 @@
-<p align="center">
-  <a href="https://github.com/grzegorz914/homebridge-enphase-envoy"><img src="https://raw.githubusercontent.com/grzegorz914/homebridge-enphase-envoy/main/graphics/envoy.png" width="540"></a>
-</p>
-
 <span align="center">
 
-# Homebridge Enphase Envoy
-
-[![npm](https://badgen.net/npm/dt/homebridge-enphase-envoy?color=purple)](https://www.npmjs.com/package/homebridge-enphase-envoy)
-[![npm](https://badgen.net/npm/v/homebridge-enphase-envoy?color=purple)](https://www.npmjs.com/package/homebridge-enphase-envoy)
+# Homebridge Enphase Envoy Matter
 
 Homebridge plugin that publishes **solar production** and **home consumption** from an Enphase Envoy / IQ Gateway as **Matter electrical sensors**, so they appear in the Apple Home **Energy** view on iOS 27 and later.
 
 </span>
+
+> **This plugin does not replace [`homebridge-enphase-envoy`](https://github.com/grzegorz914/homebridge-enphase-envoy).** It installs under a different package name and platform alias, so the two run side by side on the same Homebridge. See [Running alongside the original plugin](#running-alongside-the-original-plugin).
 
 ## What this plugin does
 
@@ -39,13 +34,33 @@ Consumption requires consumption CTs installed on the gateway. Without them the 
 
 ## Installation
 
-Install through the Homebridge UI, or:
-
 ```bash
-npm install -g homebridge-enphase-envoy
+sudo npm install -g github:jmarrmd/homebridge-enphase-envoy
 ```
 
-Then enable Matter on the plugin's child bridge and restart Homebridge. Pair the Matter bridge with the Home app if you have not already.
+Then:
+
+1. Restart Homebridge. The plugin appears as **Enphase Envoy Matter**.
+2. Configure it (see below) and restart again so it gets its own child bridge.
+3. Open the plugin's **Bridge Settings** and **enable Matter**. This is per-child-bridge, so it does not affect any other plugin.
+4. Restart, then pair the Matter bridge with the Home app using the code Homebridge shows.
+
+On an `hb-service` install (the official Raspberry Pi image), a global npm install may land outside Homebridge's plugin path. If the plugin does not appear after a restart, check the path shown in the Homebridge UI under **Settings → Plugin Path** and install there.
+
+## Running alongside the original plugin
+
+This plugin is built to coexist with `homebridge-enphase-envoy` rather than supersede it. Everything that would collide is deliberately distinct:
+
+| | Original | This plugin |
+|---|---|---|
+| Package | `homebridge-enphase-envoy` | `homebridge-enphase-envoy-matter` |
+| Platform (`platform` key) | `enphaseEnvoy` | `enphaseEnvoyMatter` |
+| Child bridge | its own | its own |
+| Token cache | `<storage>/enphaseEnvoy/` | `<storage>/enphaseEnvoyMatter/` |
+
+So you keep both platform blocks in `config.json`, enable Matter only on this plugin's child bridge, and leave the original's bridge untouched. Both will poll the same gateway; that is safe, because every request this plugin makes is read-only — it never writes settings or controls devices.
+
+You will see the original plugin's HomeKit accessories and these two Matter sensors at the same time in the Home app. That is expected, and is the point: it lets you compare them before deciding whether to keep both.
 
 ## Configuration
 
@@ -55,7 +70,7 @@ Configure through the Homebridge UI, or add a platform block by hand:
 {
   "platforms": [
     {
-      "platform": "enphaseEnvoy",
+      "platform": "enphaseEnvoyMatter",
       "devices": [
         {
           "name": "Envoy",
@@ -107,13 +122,13 @@ Lifetime energy counters are held at their high-water mark, since Matter treats 
 
 Live power is pushed on every poll. Cumulative energy is pushed at most once a minute — Matter delivers energy updates as events to every subscribed controller without throttling, so a faster cadence is just noise.
 
-## Upgrading from v10
+## Relationship to the original plugin
 
-v11 is a deliberate reduction in scope. The plugin previously exposed inverters, batteries, Ensemble/Enpower/Encharge devices, meters, grid profiles, production switches, and MQTT/REST integrations as HomeKit accessories. All of that is gone; only the two Matter energy sensors remain.
+This is a heavily reduced derivative of `homebridge-enphase-envoy` v10.7.7, kept in the same repository. The original exposes inverters, batteries, Ensemble/Enpower/Encharge devices, meters, grid profiles, production switches and MQTT/REST integrations as HomeKit accessories. None of that is here — only the two Matter energy sensors.
 
-On first run v11 removes the HomeKit accessories cached by earlier versions. Configuration keys for the gateway address and authentication are unchanged, so those parts of an existing config keep working — everything else is ignored.
+The gateway address and authentication config keys are carried over unchanged, so you can copy those fields straight across from an existing `enphaseEnvoy` block. Every other v10 option is ignored.
 
-If you need the full accessory tree, stay on [v10.7.7](https://www.npmjs.com/package/homebridge-enphase-envoy/v/10.7.7).
+If you want the full accessory tree, keep using [`homebridge-enphase-envoy`](https://github.com/grzegorz914/homebridge-enphase-envoy) — that is exactly what running the two side by side is for.
 
 ## Troubleshooting
 

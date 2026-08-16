@@ -1,6 +1,14 @@
-export const PluginName = 'homebridge-enphase-envoy';
-export const PlatformName = 'enphaseEnvoy';
-export const DisplayName = 'Enphase Envoy';
+/**
+ * Deliberately distinct from `homebridge-enphase-envoy` / `enphaseEnvoy`, so
+ * this plugin installs and runs alongside the original rather than replacing
+ * it. Both may talk to the same gateway; every call made here is read-only.
+ */
+export const PluginName = 'homebridge-enphase-envoy-matter';
+export const PlatformName = 'enphaseEnvoyMatter';
+export const DisplayName = 'Enphase Envoy Matter';
+
+/** Storage subdirectory for the token cache, kept separate for the same reason. */
+export const StorageDir = 'enphaseEnvoyMatter';
 
 /** Local accounts used for HTTP Digest auth on firmware < v7. */
 export const Authorization = {

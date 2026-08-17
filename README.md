@@ -14,8 +14,8 @@ It exposes exactly two things per gateway:
 
 | Sensor | Matter device type | Reports |
 |--------|--------------------|---------|
-| Solar Production | ElectricalSensor (0x0510) | live watts, lifetime energy **exported** |
-| Home Consumption | ElectricalSensor (0x0510) | live watts, lifetime energy **imported** |
+| Solar Production | ElectricalSensor (0x0510), or SolarPower (0x17) — see below | live watts, lifetime energy **exported** |
+| Home Consumption | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts, lifetime energy **imported** |
 
 Import and export are relative to the endpoint: the PV array *delivers* energy, the house *draws* it. That distinction is what lets a controller tell a producer from a load.
 
@@ -98,7 +98,7 @@ Configure through the Homebridge UI, or add a platform block by hand:
 | `productionName` | `<name> Solar Production` | Name of the production sensor. |
 | `consumptionEnabled` | `true` | Publish the home consumption sensor. |
 | `consumptionName` | `<name> Home Consumption` | Name of the consumption sensor. |
-| `solarPowerDeviceType` | `false` | Publish production as Matter `SolarPower` (0x17) instead of a plain electrical sensor. Experimental — see below. |
+| `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Experimental — see below. |
 | `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
 | `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
 
@@ -111,18 +111,31 @@ Multiple gateways are supported — add more entries to `devices`.
 
 The plugin detects which is needed from `/info.xml`, and falls back to the other URL scheme if the configured one is unreachable.
 
-## Telling production apart from consumption (`solarPowerDeviceType`)
+## Telling production apart from consumption (`energyDeviceTypes`)
 
-By default both sensors are published as Matter `ElectricalSensor` (0x0510). A controller reads an endpoint's **DeviceTypeList** to classify it, and with both endpoints carrying the same single type the Apple Home app cannot tell generation from load — so it adds them together on the summary tile. The individual values are still correct one level down.
+By default both sensors are published as Matter `ElectricalSensor` (0x0510). A controller classifies an endpoint from its **DeviceTypeList**, and `ElectricalSensor` is a **utility** class device type — per the Matter spec, not something meant to stand alone as a device. With both endpoints carrying only that, the Apple Home app may not treat them as two separate devices, and adds them together on the summary tile. The individual values are still correct one level down.
 
-The import/export direction of the energy attributes does *not* fix this. Only the device type does.
+The import/export direction of the energy attributes does *not* change this. Only the device type does.
 
-Setting `"solarPowerDeviceType": true` publishes production with matter.js's `SolarPower` device type (0x17) instead. `SolarPower` declares no measurement clusters of its own, which is correct: Homebridge still attaches the power and energy clusters from the declared state, and additionally advertises `ElectricalSensor` as a secondary type, so the endpoint lists both — the shape the Matter specification describes for a PV array.
+Setting `"energyDeviceTypes": true` publishes each sensor with the application-class device type that matches what it actually is:
+
+| Sensor | Device type | Why |
+|---|---|---|
+| Production | `SolarPower` (0x17) | The spec's PV array type. Declares no clusters of its own — it is a semantic tag. |
+| Consumption | `ElectricalMeter` (0x0514) | "Meters the electrical energy being imported and/or exported." Its mandatory clusters are exactly the two this plugin declares. |
+
+Not `ElectricalUtilityMeter` (0x0511): despite the name it models the utility *account* — its mandatory cluster is `MeterIdentification`, not measurement — so it describes the revenue meter at the service entrance, not house load.
+
+Homebridge still attaches the power and energy clusters from the declared state and additionally advertises `ElectricalSensor` as a secondary type, so each endpoint lists both — the shape the Matter specification describes.
 
 Two caveats, both real:
 
-- **Homebridge does not expose this device type.** Its `api.matter.deviceTypes` list stops at `ElectricalSensor`, so the plugin reaches into matter.js (installed alongside Homebridge) to get it. If that resolution fails for any reason the plugin logs a warning and falls back to `ElectricalSensor` — it never breaks.
-- **Whether the Home app honours 0x17 is unconfirmed.** There is good reason to expect it does, since Apple demonstrably reads the DeviceTypeList for other types, but it has not been verified. Treat the option as an experiment; turn it off if it does not help.
+- **Homebridge does not expose these device types.** Its `api.matter.deviceTypes` list covers 38 entries and omits the energy types, so the plugin reaches into matter.js (installed alongside Homebridge) to get them. If that fails the plugin logs which resolution paths it tried and falls back to `ElectricalSensor` — it never breaks.
+- **Whether the Home app honours them is unconfirmed.** Treat the option as an experiment; turn it off if it does not help.
+
+Changing this option changes the endpoint's structure, so Homebridge tears the accessory down and rebuilds it. Expect a re-registration in the log, and re-pair the Matter bridge if a controller does not pick up the change.
+
+The earlier `solarPowerDeviceType` option still works and means the same thing.
 
 ## How readings are sourced
 

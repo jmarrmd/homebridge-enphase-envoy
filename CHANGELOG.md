@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 
+## [1.2.0] - (17.08.2026)
+
+### Added
+
+- `energyDeviceTypes` (default `false`) replaces and extends `solarPowerDeviceType`, which still works and now means the same thing. It publishes production as `SolarPower` (0x17) **and** consumption as `ElectricalMeter` (0x0514).
+- `ElectricalMeter` is the right type for house load: the spec describes it as metering "the electrical energy being imported and/or exported", and its mandatory clusters are exactly the `ElectricalPowerMeasurement` + `ElectricalEnergyMeasurement` pair this plugin already declares.
+- Deliberately not `ElectricalUtilityMeter` (0x0511): despite the name it models the utility *account* — its mandatory cluster is `MeterIdentification`, not measurement — so it describes the revenue meter at the service entrance rather than house load, and declaring it without that cluster would violate the spec.
+
+### Changed
+
+- The rationale is broader than telling generation from load: `ElectricalSensor` (0x0510) is a **utility** class device type, which per the Matter spec is not meant to stand alone as a device. Previously *both* sensors carried only that, so a controller had little reason to treat either as its own device. Both now get an application-class type.
+
 ## [1.1.0] - (16.08.2026)
 
 ### Added

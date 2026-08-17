@@ -50,41 +50,49 @@ import { createRequire } from 'module';
 import { PluginName, PlatformName, MeasurementKind } from './constants.js';
 
 /**
- * Resolve matter.js's SolarPower device type (0x17), which marks an endpoint as
- * a PV array rather than a generic meter.
+ * Resolve a device type from matter.js that Homebridge does not surface in
+ * `api.matter.deviceTypes` — its curated list covers 38 entries and omits the
+ * energy device types such as SolarPower (0x17) and ElectricalMeter (0x0514).
  *
- * Homebridge does not surface this in `api.matter.deviceTypes` — its curated
- * list stops at ElectricalSensor — so reach it through matter.js directly.
- * matter.js is installed alongside Homebridge, which is installed alongside us,
- * so ordinary Node resolution finds it from either vantage point.
+ * matter.js is installed alongside Homebridge, which is normally installed
+ * alongside this plugin, so ordinary Node resolution finds it from one of three
+ * vantage points. Each is tried in turn.
  *
  * This deliberately reaches past the plugin API, so it is treated as optional:
- * returns null on any failure and the caller falls back to ElectricalSensor,
- * which is what this plugin always did before the option existed.
+ * on failure the caller falls back to ElectricalSensor. The attempted paths and
+ * their errors are returned rather than swallowed, because "it silently did
+ * nothing" is the hardest possible thing to debug from a log.
  *
- * @returns {object|null} the SolarPower endpoint, or null when unavailable
+ * @param {string} moduleName e.g. 'solar-power'
+ * @param {string} exportName e.g. 'SolarPowerDevice'
+ * @returns {{device: object|null, tried: string[]}}
  */
-function resolveSolarPowerDeviceType() {
+function resolveMatterDevice(moduleName, exportName) {
     const requireFrom = createRequire(import.meta.url);
-    const specifier = '@matter/main/devices/solar-power';
+    const specifier = `@matter/main/devices/${moduleName}`;
+    const tried = [];
 
-    const attempts = [
-        // Hoisted next to us, the usual layout for a Homebridge plugin install.
-        () => requireFrom(specifier),
-        // Installed somewhere else: resolve relative to Homebridge itself,
-        // which always depends on matter.js.
-        () => createRequire(requireFrom.resolve('homebridge'))(specifier)
+    const anchors = [
+        // Hoisted next to us — the usual Homebridge plugin layout.
+        ['plugin', () => requireFrom],
+        // Resolve relative to Homebridge itself, which always depends on matter.js.
+        ['homebridge package', () => createRequire(requireFrom.resolve('homebridge'))],
+        // Last resort: the running Homebridge process. argv[1] is its entry
+        // script, which is inside the very installation that loaded matter.js.
+        ['running process', () => createRequire(process.argv[1])]
     ];
 
-    for (const attempt of attempts) {
+    for (const [label, makeRequire] of anchors) {
         try {
-            const solar = attempt()?.SolarPowerDevice;
-            if (solar?.deviceType) return solar;
-        } catch {
-            // Try the next resolution path.
+            const device = makeRequire()(specifier)?.[exportName];
+            if (device?.deviceType) return { device, tried };
+            tried.push(`${label}: loaded but no usable ${exportName} export`);
+        } catch (error) {
+            tried.push(`${label}: ${error.message ?? error}`);
         }
     }
-    return null;
+
+    return { device: null, tried };
 }
 
 /** Matter uses milli-units for electrical measurements. */
@@ -191,14 +199,14 @@ class MatterEnergyBridge {
             return matter.deviceTypes.ElectricalSensor;
         }
 
-        const solar = resolveSolarPowerDeviceType();
-        if (!solar) {
-            this.log.warn(`${this.prefix}Could not load the Matter SolarPower device type from matter.js — publishing production as a plain ElectricalSensor instead.`);
+        const { device, tried } = resolveMatterDevice('solar-power', 'SolarPowerDevice');
+        if (!device) {
+            this.log.warn(`${this.prefix}Could not load the Matter SolarPower device type from matter.js — publishing production as a plain ElectricalSensor instead. Tried: ${tried.join(' | ')}`);
             return matter.deviceTypes.ElectricalSensor;
         }
 
-        this.log.info(`${this.prefix}Publishing production as Matter SolarPower (0x${solar.deviceType.toString(16)}). This is experimental — if the Home app does not pick it up, set "solarPowerDeviceType": false.`);
-        return solar;
+        this.log.info(`${this.prefix}Publishing production as Matter SolarPower (0x${device.deviceType.toString(16)}). This is experimental — if the Home app does not pick it up, set "solarPowerDeviceType": false.`);
+        return device;
     }
 
     /**

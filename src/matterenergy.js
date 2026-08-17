@@ -46,7 +46,46 @@
  * reports why instead of throwing.
  */
 
+import { createRequire } from 'module';
 import { PluginName, PlatformName, MeasurementKind } from './constants.js';
+
+/**
+ * Resolve matter.js's SolarPower device type (0x17), which marks an endpoint as
+ * a PV array rather than a generic meter.
+ *
+ * Homebridge does not surface this in `api.matter.deviceTypes` — its curated
+ * list stops at ElectricalSensor — so reach it through matter.js directly.
+ * matter.js is installed alongside Homebridge, which is installed alongside us,
+ * so ordinary Node resolution finds it from either vantage point.
+ *
+ * This deliberately reaches past the plugin API, so it is treated as optional:
+ * returns null on any failure and the caller falls back to ElectricalSensor,
+ * which is what this plugin always did before the option existed.
+ *
+ * @returns {object|null} the SolarPower endpoint, or null when unavailable
+ */
+function resolveSolarPowerDeviceType() {
+    const requireFrom = createRequire(import.meta.url);
+    const specifier = '@matter/main/devices/solar-power';
+
+    const attempts = [
+        // Hoisted next to us, the usual layout for a Homebridge plugin install.
+        () => requireFrom(specifier),
+        // Installed somewhere else: resolve relative to Homebridge itself,
+        // which always depends on matter.js.
+        () => createRequire(requireFrom.resolve('homebridge'))(specifier)
+    ];
+
+    for (const attempt of attempts) {
+        try {
+            const solar = attempt()?.SolarPowerDevice;
+            if (solar?.deviceType) return solar;
+        } catch {
+            // Try the next resolution path.
+        }
+    }
+    return null;
+}
 
 /** Matter uses milli-units for electrical measurements. */
 const milli = (value) => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) : null);
@@ -64,11 +103,15 @@ class MatterEnergyBridge {
      * @param {object} options.api   Homebridge API
      * @param {object} options.log   Homebridge logger
      * @param {string} options.prefix Log prefix identifying the device
+     * @param {boolean} options.solarPowerDeviceType opt in to publishing
+     *        production as Matter SolarPower (0x17) instead of a plain
+     *        ElectricalSensor. See resolveSolarPowerDeviceType.
      */
-    constructor({ api, log, prefix = '' }) {
+    constructor({ api, log, prefix = '', solarPowerDeviceType = false }) {
         this.api = api;
         this.log = log;
         this.prefix = prefix;
+        this.solarPowerDeviceType = solarPowerDeviceType;
 
         /** @type {Map<string, {uuid: string, direction: string, lastEnergy: number|null, lastEnergyAt: number}>} */
         this.sensors = new Map();
@@ -129,7 +172,37 @@ class MatterEnergyBridge {
     }
 
     /**
-     * Register the configured sensors as Matter ElectricalSensor accessories.
+     * Pick the Matter device type for one sensor.
+     *
+     * Consumption is a load and stays an ElectricalSensor. Production is a
+     * generator, and a controller can only tell the two apart from the
+     * endpoint's DeviceTypeList — the energy import/export direction is not
+     * enough on its own. Opting in to SolarPower (0x17) puts that distinction
+     * where a controller will look for it.
+     *
+     * SolarPower declares no measurement clusters of its own, which is correct:
+     * Homebridge attaches ElectricalPowerMeasurement / ElectricalEnergyMeasurement
+     * from the cluster state we declare, and additionally advertises
+     * ElectricalSensor (0x0510) as a secondary device type. The endpoint ends up
+     * listing both, which is the shape the Matter spec describes for a PV array.
+     */
+    deviceTypeFor(kind, matter) {
+        if (kind !== MeasurementKind.Production || !this.solarPowerDeviceType) {
+            return matter.deviceTypes.ElectricalSensor;
+        }
+
+        const solar = resolveSolarPowerDeviceType();
+        if (!solar) {
+            this.log.warn(`${this.prefix}Could not load the Matter SolarPower device type from matter.js — publishing production as a plain ElectricalSensor instead.`);
+            return matter.deviceTypes.ElectricalSensor;
+        }
+
+        this.log.info(`${this.prefix}Publishing production as Matter SolarPower (0x${solar.deviceType.toString(16)}). This is experimental — if the Home app does not pick it up, set "solarPowerDeviceType": false.`);
+        return solar;
+    }
+
+    /**
+     * Register the configured sensors as Matter accessories.
      *
      * @param {object} device
      * @param {object} device.info      device info from EnvoyClient#connect
@@ -153,7 +226,7 @@ class MatterEnergyBridge {
             accessories.push({
                 UUID: uuid,
                 displayName: sensor.displayName,
-                deviceType: matter.deviceTypes.ElectricalSensor,
+                deviceType: this.deviceTypeFor(sensor.kind, matter),
                 serialNumber: `${info.serialNumber}-${sensor.kind}`,
                 manufacturer: 'Enphase',
                 model: info.modelName,

@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 
+## [1.1.0] - (16.08.2026)
+
+### Added
+
+- `solarPowerDeviceType` (default `false`): publishes the production sensor with matter.js's `SolarPower` device type (0x17) instead of a plain `ElectricalSensor`. A controller classifies an endpoint from its DeviceTypeList, so with both sensors advertising only `ElectricalSensor` the Apple Home app cannot tell generation from load and adds them together on the summary tile. The energy import/export direction does not affect this — only the device type does.
+- Homebridge does not surface `SolarPower` in `api.matter.deviceTypes`, so it is resolved from matter.js directly (installed alongside Homebridge). Resolution failure logs a warning and falls back to `ElectricalSensor`, so the option can never break registration.
+- Consumption deliberately stays an `ElectricalSensor` — it is a load, and that is the correct type for it.
+
+Experimental: whether the Home app honours 0x17 is unconfirmed. Set it back to `false` if it does not help.
+
 ## [1.0.0] - (16.08.2026)
 
 ### Added

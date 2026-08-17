@@ -155,7 +155,8 @@ class EnvoyEnergyDevice {
         this.matter = new MatterEnergyBridge({
             api,
             log: this.scopedLogger(),
-            prefix: this.prefix
+            prefix: this.prefix,
+            solarPowerDeviceType: config.solarPowerDeviceType ?? false
         });
 
         this.pollTimer = null;

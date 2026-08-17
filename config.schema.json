@@ -127,6 +127,16 @@
                                 "functionBody": "return model.devices[arrayIndices].consumptionEnabled !== false;"
                             }
                         },
+                        "solarPowerDeviceType": {
+                            "title": "Publish production as Matter SolarPower (experimental)",
+                            "type": "boolean",
+                            "default": false,
+                            "required": false,
+                            "description": "Marks the production sensor with the Matter SolarPower device type (0x17) instead of a plain electrical sensor, so a controller can tell generation from load. Without it the Home app has no way to distinguish the two and adds them together on the summary tile. Experimental: Homebridge does not expose this device type officially, and whether the Home app honours it is unconfirmed. Falls back to a plain electrical sensor if unavailable.",
+                            "condition": {
+                                "functionBody": "return model.devices[arrayIndices].productionEnabled !== false;"
+                            }
+                        },
                         "refreshInterval": {
                             "title": "Refresh interval (seconds)",
                             "type": "integer",
@@ -208,6 +218,7 @@
                         "devices[].productionName",
                         "devices[].consumptionEnabled",
                         "devices[].consumptionName",
+                        "devices[].solarPowerDeviceType",
                         "devices[].refreshInterval"
                     ]
                 },

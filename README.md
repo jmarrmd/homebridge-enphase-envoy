@@ -98,6 +98,7 @@ Configure through the Homebridge UI, or add a platform block by hand:
 | `productionName` | `<name> Solar Production` | Name of the production sensor. |
 | `consumptionEnabled` | `true` | Publish the home consumption sensor. |
 | `consumptionName` | `<name> Home Consumption` | Name of the consumption sensor. |
+| `solarPowerDeviceType` | `false` | Publish production as Matter `SolarPower` (0x17) instead of a plain electrical sensor. Experimental — see below. |
 | `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
 | `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
 
@@ -109,6 +110,19 @@ Multiple gateways are supported — add more entries to `devices`.
 - **Firmware v7 and later** — a JWT is required. Mode `1` mints one from your Enlighten credentials and caches it under Homebridge's storage path, renewing it an hour before expiry. Mode `2` uses a token you generated yourself.
 
 The plugin detects which is needed from `/info.xml`, and falls back to the other URL scheme if the configured one is unreachable.
+
+## Telling production apart from consumption (`solarPowerDeviceType`)
+
+By default both sensors are published as Matter `ElectricalSensor` (0x0510). A controller reads an endpoint's **DeviceTypeList** to classify it, and with both endpoints carrying the same single type the Apple Home app cannot tell generation from load — so it adds them together on the summary tile. The individual values are still correct one level down.
+
+The import/export direction of the energy attributes does *not* fix this. Only the device type does.
+
+Setting `"solarPowerDeviceType": true` publishes production with matter.js's `SolarPower` device type (0x17) instead. `SolarPower` declares no measurement clusters of its own, which is correct: Homebridge still attaches the power and energy clusters from the declared state, and additionally advertises `ElectricalSensor` as a secondary type, so the endpoint lists both — the shape the Matter specification describes for a PV array.
+
+Two caveats, both real:
+
+- **Homebridge does not expose this device type.** Its `api.matter.deviceTypes` list stops at `ElectricalSensor`, so the plugin reaches into matter.js (installed alongside Homebridge) to get it. If that resolution fails for any reason the plugin logs a warning and falls back to `ElectricalSensor` — it never breaks.
+- **Whether the Home app honours 0x17 is unconfirmed.** There is good reason to expect it does, since Apple demonstrably reads the DeviceTypeList for other types, but it has not been verified. Treat the option as an experiment; turn it off if it does not help.
 
 ## How readings are sourced
 

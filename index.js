@@ -156,7 +156,9 @@ class EnvoyEnergyDevice {
             api,
             log: this.scopedLogger(),
             prefix: this.prefix,
-            solarPowerDeviceType: config.solarPowerDeviceType ?? false
+            // solarPowerDeviceType is the v1.1.0 name, kept working because it
+            // covered production only; the option now covers both sensors.
+            energyDeviceTypes: config.energyDeviceTypes ?? config.solarPowerDeviceType ?? false
         });
 
         this.pollTimer = null;

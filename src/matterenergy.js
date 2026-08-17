@@ -50,6 +50,25 @@ import { createRequire } from 'module';
 import { PluginName, PlatformName, MeasurementKind } from './constants.js';
 
 /**
+ * The application-class device type for each measurement, resolved from
+ * matter.js. Both replace the plain ElectricalSensor, which is a *utility*
+ * class type and per the Matter spec is not meant to stand alone as a device.
+ *
+ * SolarPower (0x17) declares no clusters of its own — it is a semantic tag for
+ * a PV array. ElectricalMeter (0x0514) mandates exactly the two clusters this
+ * plugin already declares, and matter.js deliberately leaves them unattached so
+ * the composer selects the right features — which is what Homebridge does.
+ *
+ * Not ElectricalUtilityMeter (0x0511): despite the name it models the utility
+ * *account* — its mandatory cluster is MeterIdentification, not measurement —
+ * so it describes the revenue meter at the service entrance, not house load.
+ */
+const ENERGY_DEVICE_TYPES = {
+    [MeasurementKind.Production]: { module: 'solar-power', exportName: 'SolarPowerDevice' },
+    [MeasurementKind.Consumption]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
+};
+
+/**
  * Resolve a device type from matter.js that Homebridge does not surface in
  * `api.matter.deviceTypes` — its curated list covers 38 entries and omits the
  * energy device types such as SolarPower (0x17) and ElectricalMeter (0x0514).
@@ -111,15 +130,15 @@ class MatterEnergyBridge {
      * @param {object} options.api   Homebridge API
      * @param {object} options.log   Homebridge logger
      * @param {string} options.prefix Log prefix identifying the device
-     * @param {boolean} options.solarPowerDeviceType opt in to publishing
-     *        production as Matter SolarPower (0x17) instead of a plain
-     *        ElectricalSensor. See resolveSolarPowerDeviceType.
+     * @param {boolean} options.energyDeviceTypes opt in to the application-class
+     *        energy device types instead of a plain ElectricalSensor.
+     *        See ENERGY_DEVICE_TYPES.
      */
-    constructor({ api, log, prefix = '', solarPowerDeviceType = false }) {
+    constructor({ api, log, prefix = '', energyDeviceTypes = false }) {
         this.api = api;
         this.log = log;
         this.prefix = prefix;
-        this.solarPowerDeviceType = solarPowerDeviceType;
+        this.energyDeviceTypes = energyDeviceTypes;
 
         /** @type {Map<string, {uuid: string, direction: string, lastEnergy: number|null, lastEnergyAt: number}>} */
         this.sensors = new Map();
@@ -195,17 +214,16 @@ class MatterEnergyBridge {
      * listing both, which is the shape the Matter spec describes for a PV array.
      */
     deviceTypeFor(kind, matter) {
-        if (kind !== MeasurementKind.Production || !this.solarPowerDeviceType) {
-            return matter.deviceTypes.ElectricalSensor;
-        }
+        const spec = this.energyDeviceTypes ? ENERGY_DEVICE_TYPES[kind] : null;
+        if (!spec) return matter.deviceTypes.ElectricalSensor;
 
-        const { device, tried } = resolveMatterDevice('solar-power', 'SolarPowerDevice');
+        const { device, tried } = resolveMatterDevice(spec.module, spec.exportName);
         if (!device) {
-            this.log.warn(`${this.prefix}Could not load the Matter SolarPower device type from matter.js — publishing production as a plain ElectricalSensor instead. Tried: ${tried.join(' | ')}`);
+            this.log.warn(`${this.prefix}Could not load the Matter ${spec.exportName} device type from matter.js — publishing ${kind} as a plain ElectricalSensor instead. Tried: ${tried.join(' | ')}`);
             return matter.deviceTypes.ElectricalSensor;
         }
 
-        this.log.info(`${this.prefix}Publishing production as Matter SolarPower (0x${device.deviceType.toString(16)}). This is experimental — if the Home app does not pick it up, set "solarPowerDeviceType": false.`);
+        this.log.info(`${this.prefix}Publishing ${kind} as Matter ${device.name} (0x${device.deviceType.toString(16)}). This is experimental — if the Home app does not pick it up, set "energyDeviceTypes": false.`);
         return device;
     }
 

@@ -127,15 +127,12 @@
                                 "functionBody": "return model.devices[arrayIndices].consumptionEnabled !== false;"
                             }
                         },
-                        "solarPowerDeviceType": {
-                            "title": "Publish production as Matter SolarPower (experimental)",
+                        "energyDeviceTypes": {
+                            "title": "Use Matter energy device types (experimental)",
                             "type": "boolean",
                             "default": false,
                             "required": false,
-                            "description": "Marks the production sensor with the Matter SolarPower device type (0x17) instead of a plain electrical sensor, so a controller can tell generation from load. Without it the Home app has no way to distinguish the two and adds them together on the summary tile. Experimental: Homebridge does not expose this device type officially, and whether the Home app honours it is unconfirmed. Falls back to a plain electrical sensor if unavailable.",
-                            "condition": {
-                                "functionBody": "return model.devices[arrayIndices].productionEnabled !== false;"
-                            }
+                            "description": "Publishes production as SolarPower (0x17) and consumption as ElectricalMeter (0x0514) instead of a plain electrical sensor. ElectricalSensor (0x0510) is a *utility* class device type, which per the Matter spec is not meant to stand alone as a device — so a controller may not treat the sensors as separate devices and can add them together on the summary tile. Experimental: Homebridge does not expose these device types officially, and whether the Home app honours them is unconfirmed. Falls back to a plain electrical sensor if unavailable. Replaces the earlier solarPowerDeviceType option, which still works."
                         },
                         "refreshInterval": {
                             "title": "Refresh interval (seconds)",
@@ -218,7 +215,7 @@
                         "devices[].productionName",
                         "devices[].consumptionEnabled",
                         "devices[].consumptionName",
-                        "devices[].solarPowerDeviceType",
+                        "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]
                 },

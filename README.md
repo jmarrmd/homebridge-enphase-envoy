@@ -135,7 +135,7 @@ Homebridge still attaches the power and energy clusters from the declared state 
 One caveat remains:
 
 - **Homebridge does not expose these device types.** Its `api.matter.deviceTypes` list covers 38 entries and omits the energy types, so the plugin reaches into matter.js (installed alongside Homebridge) to get them. If that fails the plugin logs which resolution paths it tried and falls back to `ElectricalSensor` — it never breaks.
-- **The Home app does honour them** (confirmed on an iOS 27 beta, August 2026). Production appears as its own device in Electricity Usage, with its energy counted as *exported* — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Both the device type and the export/import direction matter: the type is what makes it a separate device, the direction is what puts the energy in the Exported column rather than Grid Use.
+- **The Home app does honour them** (confirmed on an iOS 27 beta, August 2026), including the grid sensor, which appears in Electricity Usage with hourly resolution once it has a day of history behind it. Two endpoints sharing `ElectricalMeter` (0x0514) is fine — a new sensor is simply absent from the picker until it has history, which is easily mistaken for a device-type problem. Production appears as its own device in Electricity Usage, with its energy counted as *exported* — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Both the device type and the export/import direction matter: the type is what makes it a separate device, the direction is what puts the energy in the Exported column rather than Grid Use.
 
 Changing this option changes the endpoint's structure, so Homebridge tears the accessory down and rebuilds it. Expect a re-registration in the log, and re-pair the Matter bridge if a controller does not pick up the change.
 
@@ -161,6 +161,12 @@ cumulativeEnergyExported  ← sent to the utility
 - Counters are persisted to `<storage>/enphaseEnvoyMatter/gridEnergy_<host>.json` and restored on start, because Matter treats cumulative energy as monotonic and a restart that reset them to zero would corrupt the Home app's history.
 
 The honest caveat: this is a Riemann sum at your polling rate, so swings between samples are invisible to it. Expect it to track well for slow-moving loads and to under-resolve spiky ones. It is an approximation where the production and consumption counters are the gateway's own measurements. A shorter `refreshInterval` improves it at the cost of polling the gateway harder.
+
+**Integrating is not a workaround for a missing endpoint — it is the only thing that can work.** Checked against a real gateway (IQ Gateway, firmware D8.3.5289):
+
+- `/ivp/meters/readings` exposes only a production meter and a load-side consumption meter. Neither `actEnergyRcvd` is a grid-export counter: the production meter's is 0.0001% of delivered (inverter standby), and the consumption meter's is a rounding error against a lifetime that would be orders of magnitude larger if it tracked export.
+- `net-consumption` is computed by the gateway, not measured: `total-consumption − production = net-consumption` matched to **0.000000 Wh**.
+- Most importantly, the split is not recoverable from *any* lifetime register, on any gateway. `import = ∫max(0, load − production)dt` and `export = ∫max(0, production − load)dt` both need the time series. Lifetime net of 16.1 MWh is equally consistent with "imported 16.1, exported 0" and "imported 50, exported 34". Even a real grid CT would only help by having counted the two separately as it went — which is exactly what this does.
 
 ## How readings are sourced
 

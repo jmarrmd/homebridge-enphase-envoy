@@ -65,8 +65,9 @@ export const PartNumbers = {
     '800-02403-r08': 'IQ Combiner C6'
 };
 
-/** Identifies the two Matter sensors this plugin publishes. */
+/** Identifies the Matter sensors this plugin publishes. */
 export const MeasurementKind = {
     Production: 'production',
-    Consumption: 'consumption'
+    Consumption: 'consumption',
+    Grid: 'grid'
 };

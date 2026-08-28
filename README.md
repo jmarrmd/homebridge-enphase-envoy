@@ -10,12 +10,13 @@ Homebridge plugin that publishes **solar production** and **home consumption** f
 
 ## What this plugin does
 
-It exposes exactly two things per gateway:
+It exposes three things per gateway:
 
 | Sensor | Matter device type | Reports |
 |--------|--------------------|---------|
 | Solar Production | ElectricalSensor (0x0510), or SolarPower (0x17) — see below | live watts, lifetime energy **exported** |
 | Home Consumption | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts, lifetime energy **imported** |
+| Grid | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts (signed), lifetime energy **both directions** |
 
 Import and export are relative to the endpoint: the PV array *delivers* energy, the house *draws* it. That distinction is what lets a controller tell a producer from a load.
 
@@ -60,7 +61,7 @@ This plugin is built to coexist with `homebridge-enphase-envoy` rather than supe
 
 So you keep both platform blocks in `config.json`, enable Matter only on this plugin's child bridge, and leave the original's bridge untouched. Both will poll the same gateway; that is safe, because every request this plugin makes is read-only — it never writes settings or controls devices.
 
-You will see the original plugin's HomeKit accessories and these two Matter sensors at the same time in the Home app. That is expected, and is the point: it lets you compare them before deciding whether to keep both.
+You will see the original plugin's HomeKit accessories and these Matter sensors at the same time in the Home app. That is expected, and is the point: it lets you compare them before deciding whether to keep both.
 
 ## Configuration
 
@@ -98,7 +99,9 @@ Configure through the Homebridge UI, or add a platform block by hand:
 | `productionName` | `<name> Solar Production` | Name of the production sensor. |
 | `consumptionEnabled` | `true` | Publish the home consumption sensor. |
 | `consumptionName` | `<name> Home Consumption` | Name of the consumption sensor. |
-| `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Experimental — see below. |
+| `gridEnabled` | `true` | Publish the grid sensor — what crosses the service entrance. |
+| `gridName` | `<name> Grid` | Name of the grid sensor. |
+| `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Confirmed working — see below. |
 | `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
 | `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
 
@@ -115,7 +118,7 @@ The plugin detects which is needed from `/info.xml`, and falls back to the other
 
 By default both sensors are published as Matter `ElectricalSensor` (0x0510). A controller classifies an endpoint from its **DeviceTypeList**, and `ElectricalSensor` is a **utility** class device type — per the Matter spec, not something meant to stand alone as a device. With both endpoints carrying only that, the Apple Home app may not treat them as two separate devices, and adds them together on the summary tile. The individual values are still correct one level down.
 
-The import/export direction of the energy attributes does *not* change this. Only the device type does.
+The two settings do different jobs, and you need both: the **device type** is what makes each sensor a separate device, and the **import/export direction** is what decides which column its energy lands in (Exported vs Grid Use).
 
 Setting `"energyDeviceTypes": true` publishes each sensor with the application-class device type that matches what it actually is:
 
@@ -123,19 +126,41 @@ Setting `"energyDeviceTypes": true` publishes each sensor with the application-c
 |---|---|---|
 | Production | `SolarPower` (0x17) | The spec's PV array type. Declares no clusters of its own — it is a semantic tag. |
 | Consumption | `ElectricalMeter` (0x0514) | "Meters the electrical energy being imported and/or exported." Its mandatory clusters are exactly the two this plugin declares. |
+| Grid | `ElectricalMeter` (0x0514) | The same type, and it describes the grid connection more exactly than it does house load — this is the endpoint that genuinely does both directions. |
 
 Not `ElectricalUtilityMeter` (0x0511): despite the name it models the utility *account* — its mandatory cluster is `MeterIdentification`, not measurement — so it describes the revenue meter at the service entrance, not house load.
 
 Homebridge still attaches the power and energy clusters from the declared state and additionally advertises `ElectricalSensor` as a secondary type, so each endpoint lists both — the shape the Matter specification describes.
 
-Two caveats, both real:
+One caveat remains:
 
 - **Homebridge does not expose these device types.** Its `api.matter.deviceTypes` list covers 38 entries and omits the energy types, so the plugin reaches into matter.js (installed alongside Homebridge) to get them. If that fails the plugin logs which resolution paths it tried and falls back to `ElectricalSensor` — it never breaks.
-- **Whether the Home app honours them is unconfirmed.** Treat the option as an experiment; turn it off if it does not help.
+- **The Home app does honour them** (confirmed on an iOS 27 beta, August 2026). Production appears as its own device in Electricity Usage, with its energy counted as *exported* — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Both the device type and the export/import direction matter: the type is what makes it a separate device, the direction is what puts the energy in the Exported column rather than Grid Use.
 
 Changing this option changes the endpoint's structure, so Homebridge tears the accessory down and rebuilds it. Expect a re-registration in the log, and re-pair the Matter bridge if a controller does not pick up the change.
 
 The earlier `solarPowerDeviceType` option still works and means the same thing.
+
+## The grid sensor
+
+Neither production nor house load tells a controller what crossed your service entrance, because solar consumed on site never touches the grid. Publishing only those two is why the Home app shows a house-load *total* with no grid figure: it is handed "imported 61 kWh" for the whole house and takes that at face value, even though much of it came from the roof.
+
+The grid sensor closes that gap. It is the only one that reports **both** cumulative directions:
+
+```
+cumulativeEnergyImported  ← drawn from the utility
+cumulativeEnergyExported  ← sent to the utility
+```
+
+**Power** comes from the `net-consumption` CT when the gateway has one, since that is a direct measurement of the service entrance. Otherwise it is derived as `house load − production`, which is the same quantity by conservation of energy.
+
+**Energy is accumulated by the plugin**, and this is the part worth understanding before you trust the numbers. The gateway reports lifetime net as a single *signed* figure, and a signed net cannot be split back into two directions — net zero could mean nothing ever happened, or 100 kWh each way. So the plugin integrates the power samples itself:
+
+- Trapezoidal integration over each poll interval, with the interval split at the zero crossing when flow reverses mid-interval, so a sample pair straddling zero credits both counters rather than whichever sign won.
+- A gap longer than five poll intervals is **skipped, not integrated**. If the plugin was down for six hours that energy is genuinely unknown, and holding the last power across the gap would invent a large number.
+- Counters are persisted to `<storage>/enphaseEnvoyMatter/gridEnergy_<host>.json` and restored on start, because Matter treats cumulative energy as monotonic and a restart that reset them to zero would corrupt the Home app's history.
+
+The honest caveat: this is a Riemann sum at your polling rate, so swings between samples are invisible to it. Expect it to track well for slow-moving loads and to under-resolve spiky ones. It is an approximation where the production and consumption counters are the gateway's own measurements. A shorter `refreshInterval` improves it at the cost of polling the gateway harder.
 
 ## How readings are sourced
 

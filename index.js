@@ -94,6 +94,7 @@ class EnvoyPlatform {
             name,
             tokenMode,
             tokenFile: join(prefDir, `envoyToken_${host.replaceAll('.', '')}`),
+            gridFile: join(prefDir, `gridEnergy_${host.replaceAll('.', '')}.json`),
             log: this.log,
             api: this.api
         });
@@ -116,7 +117,7 @@ class EnvoyPlatform {
  * One Envoy gateway: connect, publish its sensors to Matter, then poll.
  */
 class EnvoyEnergyDevice {
-    constructor({ config, host, name, tokenMode, tokenFile, log, api }) {
+    constructor({ config, host, name, tokenMode, tokenFile, gridFile, log, api }) {
         this.config = config;
         this.host = host;
         this.name = name;
@@ -135,8 +136,10 @@ class EnvoyEnergyDevice {
         this.refreshMs = Math.max(config.refreshInterval ?? DEFAULT_REFRESH_SECONDS, MIN_REFRESH_SECONDS) * 1000;
         this.productionEnabled = config.productionEnabled ?? true;
         this.consumptionEnabled = config.consumptionEnabled ?? true;
+        this.gridEnabled = config.gridEnabled ?? true;
         this.productionName = config.productionName || `${name} Solar Production`;
         this.consumptionName = config.consumptionName || `${name} Home Consumption`;
+        this.gridName = config.gridName || `${name} Grid`;
 
         this.client = new EnvoyClient({
             host,
@@ -145,7 +148,11 @@ class EnvoyEnergyDevice {
             enlightenUser: config.enlightenUser,
             enlightenPasswd: config.enlightenPasswd,
             envoyToken: config.envoyToken,
-            envoyPasswd: config.envoyPasswd
+            envoyPasswd: config.envoyPasswd,
+            gridFile: this.gridEnabled ? gridFile : null,
+            // Integrating across a long outage would invent energy that was never
+            // measured, so anything beyond a few missed polls is treated as a gap.
+            gridMaxGapMs: Math.max(this.refreshMs * 5, 120_000)
         })
             .on('success', (message) => this.logLevel.success && this.log.success(`${this.prefix}${message}`))
             .on('warn', (message) => this.logLevel.warn && this.log.warn(`${this.prefix}${message}`))
@@ -229,6 +236,12 @@ class EnvoyEnergyDevice {
             this.log.info(`${this.prefix}Gateway reports no consumption data (no consumption CTs installed) — consumption sensor not published.`);
         }
 
+        if (this.gridEnabled && reading.grid) {
+            sensors.push({ kind: MeasurementKind.Grid, displayName: this.gridName, reading: reading.grid });
+        } else if (this.gridEnabled && this.logLevel.info) {
+            this.log.info(`${this.prefix}Cannot determine grid flow — needs either a net-consumption CT or both production and consumption. Grid sensor not published.`);
+        }
+
         return sensors;
     }
 
@@ -241,8 +254,13 @@ class EnvoyEnergyDevice {
 
             await Promise.all([
                 this.matter.update(MeasurementKind.Production, reading.production),
-                this.matter.update(MeasurementKind.Consumption, reading.consumption)
+                this.matter.update(MeasurementKind.Consumption, reading.consumption),
+                this.matter.update(MeasurementKind.Grid, reading.grid)
             ]);
+
+            // Cheap when nothing changed, and the counters are only as good as
+            // the last write if Homebridge stops unexpectedly.
+            await this.client.saveGridEnergy();
 
             if (this.logLevel.debug) {
                 this.log.info(`${this.prefix}debug: production ${reading.production?.power ?? '-'} W, consumption ${reading.consumption?.power ?? '-'} W`);
@@ -258,6 +276,7 @@ class EnvoyEnergyDevice {
 
     stop() {
         this.stopped = true;
+        this.client.saveGridEnergy().catch(() => {});
         if (this.pollTimer) clearInterval(this.pollTimer);
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.pollTimer = null;

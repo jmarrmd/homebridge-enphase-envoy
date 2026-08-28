@@ -1,9 +1,9 @@
 /**
  * matterenergy.js
  *
- * Publishes solar production and home consumption to Matter controllers as
- * ElectricalSensor devices, so they appear in the Apple Home Energy view
- * (iOS 27 and later) with live watts and lifetime energy.
+ * Publishes solar production, home consumption and grid flow to Matter
+ * controllers, so they appear in the Apple Home Energy view (iOS 27 and later)
+ * with live watts and lifetime energy.
  *
  * Background
  * ----------
@@ -24,10 +24,12 @@
  * -------
  *   Solar production   -> activePower + cumulativeEnergyExported
  *   Home consumption   -> activePower + cumulativeEnergyImported
+ *   Grid               -> activePower + both cumulative directions
  *
  * Import vs. export is relative to the endpoint: the PV array *delivers*
- * energy, the house *draws* it. Getting this right is what lets a controller
- * tell a producer from a load.
+ * energy, the house *draws* it. The grid sensor is the only one that does both,
+ * and it is what lets a controller work out grid use — neither production nor
+ * house load alone says what crossed the service entrance.
  *
  * Matter expresses all electrical measurements in milli-units, hence the x1000
  * conversions. Homebridge fills in the mandatory cluster attributes it can
@@ -65,7 +67,8 @@ import { PluginName, PlatformName, MeasurementKind } from './constants.js';
  */
 const ENERGY_DEVICE_TYPES = {
     [MeasurementKind.Production]: { module: 'solar-power', exportName: 'SolarPowerDevice' },
-    [MeasurementKind.Consumption]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
+    [MeasurementKind.Consumption]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
+    [MeasurementKind.Grid]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
 };
 
 /**
@@ -140,7 +143,7 @@ class MatterEnergyBridge {
         this.prefix = prefix;
         this.energyDeviceTypes = energyDeviceTypes;
 
-        /** @type {Map<string, {uuid: string, direction: string, lastEnergy: number|null, lastEnergyAt: number}>} */
+        /** @type {Map<string, {uuid: string, kind: string, lastEnergy: string|null, lastEnergyAt: number}>} */
         this.sensors = new Map();
         this.warnedUpdate = false;
     }
@@ -180,22 +183,37 @@ class MatterEnergyBridge {
      * now", and declaring the attribute up front is what makes it updatable
      * later on gateways that start reporting it mid-run.
      *
-     * @param {string} direction 'exported' for a producer, 'imported' for a load
+     * @param {string} kind one of MeasurementKind
      * @param {object|null} reading normalized reading from EnvoyClient
      */
-    buildClusters(direction, reading) {
-        const energyKey = direction === 'exported' ? 'cumulativeEnergyExported' : 'cumulativeEnergyImported';
-
+    buildClusters(kind, reading) {
         return {
             electricalPowerMeasurement: {
                 voltage: milli(reading?.voltage),
                 activeCurrent: milli(reading?.current),
                 activePower: milli(reading?.power)
             },
-            electricalEnergyMeasurement: {
-                [energyKey]: { energy: milli(reading?.energyLifetime) ?? 0 }
-            }
+            electricalEnergyMeasurement: this.energyFor(kind, reading)
         };
+    }
+
+    /**
+     * Which cumulative energy attributes a sensor declares. Homebridge picks the
+     * feature-gated ElectricalEnergyMeasurement features from exactly this, at
+     * registration — so the grid sensor must declare both directions up front
+     * even when one of them is still zero, or it could never report that side.
+     */
+    energyFor(kind, reading) {
+        if (kind === MeasurementKind.Grid) {
+            return {
+                cumulativeEnergyImported: { energy: milli(reading?.energyImported) ?? 0 },
+                cumulativeEnergyExported: { energy: milli(reading?.energyExported) ?? 0 }
+            };
+        }
+
+        // The array delivers energy; the house draws it.
+        const key = kind === MeasurementKind.Production ? 'cumulativeEnergyExported' : 'cumulativeEnergyImported';
+        return { [key]: { energy: milli(reading?.energyLifetime) ?? 0 } };
     }
 
     /**
@@ -246,7 +264,6 @@ class MatterEnergyBridge {
         const accessories = [];
 
         for (const sensor of sensors) {
-            const direction = sensor.kind === MeasurementKind.Production ? 'exported' : 'imported';
             const uuid = matter.uuid.generate(`${PluginName}:${info.serialNumber}:${sensor.kind}`);
 
             accessories.push({
@@ -258,10 +275,10 @@ class MatterEnergyBridge {
                 model: info.modelName,
                 firmwareRevision: info.software,
                 context: { serialNumber: info.serialNumber, kind: sensor.kind },
-                clusters: this.buildClusters(direction, sensor.reading)
+                clusters: this.buildClusters(sensor.kind, sensor.reading)
             });
 
-            this.sensors.set(sensor.kind, { uuid, direction, lastEnergy: null, lastEnergyAt: 0 });
+            this.sensors.set(sensor.kind, { uuid, kind: sensor.kind, lastEnergy: null, lastEnergyAt: 0 });
         }
 
         if (accessories.length === 0) {
@@ -293,11 +310,11 @@ class MatterEnergyBridge {
         if (!sensor || !reading) return;
 
         const matter = this.api.matter;
-        const clusters = this.buildClusters(sensor.direction, reading);
+        const clusters = this.buildClusters(sensor.kind, reading);
         const updates = [matter.updateAccessoryState(sensor.uuid, 'electricalPowerMeasurement', clusters.electricalPowerMeasurement)];
 
-        const energyKey = sensor.direction === 'exported' ? 'cumulativeEnergyExported' : 'cumulativeEnergyImported';
-        const energy = clusters.electricalEnergyMeasurement[energyKey].energy;
+        // The grid sensor carries two counters, so compare the whole object.
+        const energy = JSON.stringify(clusters.electricalEnergyMeasurement);
         const now = Date.now();
         const due = now - sensor.lastEnergyAt >= ENERGY_UPDATE_INTERVAL;
 

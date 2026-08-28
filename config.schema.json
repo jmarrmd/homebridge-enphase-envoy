@@ -4,7 +4,7 @@
     "singular": true,
     "fixArrayDisplay": true,
     "customUi": false,
-    "headerDisplay": "Publishes Enphase Envoy / IQ Gateway solar production and home consumption as **Matter electrical sensors**, so they appear in the Apple Home Energy view on iOS 27 and later.\n\nThis plugin registers no HomeKit accessories. It requires **Homebridge 2.4.0 or later** with **Matter enabled on this plugin's child bridge** (Bridge Settings -> enable Matter).\n\nIt installs alongside `homebridge-enphase-envoy` and does not replace it — the two use separate plugin names, platform blocks and child bridges.",
+    "headerDisplay": "Publishes Enphase Envoy / IQ Gateway solar production and home consumption as **Matter electrical sensors**, so they appear in the Apple Home Energy view on iOS 27 and later.\n\nThis plugin registers no HomeKit accessories. It requires **Homebridge 2.4.0 or later** with **Matter enabled on this plugin's child bridge** (Bridge Settings -> enable Matter).\n\nIt installs alongside `homebridge-enphase-envoy` and does not replace it \u2014 the two use separate plugin names, platform blocks and child bridges.",
     "footerDisplay": "For documentation please see the [GitHub repository](https://github.com/jmarrmd/homebridge-enphase-envoy).",
     "schema": {
         "type": "object",
@@ -127,12 +127,28 @@
                                 "functionBody": "return model.devices[arrayIndices].consumptionEnabled !== false;"
                             }
                         },
+                        "gridEnabled": {
+                            "title": "Publish grid flow",
+                            "type": "boolean",
+                            "default": true,
+                            "required": false,
+                            "description": "Publish a Matter electrical meter reporting what crosses the service entrance \u2014 imported from the utility and exported to it. Neither production nor house load answers this on its own, because solar consumed on site never touches the grid, so without this sensor a controller cannot work out grid use."
+                        },
+                        "gridName": {
+                            "title": "Grid name",
+                            "type": "string",
+                            "required": false,
+                            "description": "Name of the grid sensor. Defaults to \"<Name> Grid\".",
+                            "condition": {
+                                "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
+                            }
+                        },
                         "energyDeviceTypes": {
-                            "title": "Use Matter energy device types (experimental)",
+                            "title": "Use Matter energy device types",
                             "type": "boolean",
                             "default": false,
                             "required": false,
-                            "description": "Publishes production as SolarPower (0x17) and consumption as ElectricalMeter (0x0514) instead of a plain electrical sensor. ElectricalSensor (0x0510) is a *utility* class device type, which per the Matter spec is not meant to stand alone as a device — so a controller may not treat the sensors as separate devices and can add them together on the summary tile. Experimental: Homebridge does not expose these device types officially, and whether the Home app honours them is unconfirmed. Falls back to a plain electrical sensor if unavailable. Replaces the earlier solarPowerDeviceType option, which still works."
+                            "description": "Publishes production as SolarPower (0x17) and consumption as ElectricalMeter (0x0514) instead of a plain electrical sensor. ElectricalSensor (0x0510) is a *utility* class device type, which per the Matter spec is not meant to stand alone as a device \u2014 so a controller may not treat the sensors as separate devices and can add them together on the summary tile. Confirmed working on an iOS 27 beta (August 2026): production appears as its own device in Electricity Usage with its energy counted as exported. Homebridge does not expose these device types officially, so they are read from matter.js directly; falls back to a plain electrical sensor if unavailable. Replaces the earlier solarPowerDeviceType option, which still works."
                         },
                         "refreshInterval": {
                             "title": "Refresh interval (seconds)",
@@ -215,6 +231,8 @@
                         "devices[].productionName",
                         "devices[].consumptionEnabled",
                         "devices[].consumptionName",
+                        "devices[].gridEnabled",
+                        "devices[].gridName",
                         "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]

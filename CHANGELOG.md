@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` is confirmed working on an iOS 27 beta (August 2026). Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.3.0] - (28.08.2026)
+
+### Added
+
+- **Grid sensor** (`gridEnabled`, default `true`): reports what crosses the service entrance, carrying both `cumulativeEnergyImported` and `cumulativeEnergyExported` on one endpoint. Neither production nor house load answers this on its own — solar consumed on site never touches the grid — which is why the Home app previously showed a house-load total with no grid figure.
+- Grid power is read from the `net-consumption` CT where the gateway has one, and otherwise derived as `house load − production`.
+- Grid energy is accumulated by the plugin (`src/gridenergy.js`), because the gateway reports lifetime net as a single signed figure that cannot be split back into two directions. Trapezoidal integration, split at the zero crossing when flow reverses mid-interval; intervals longer than five polls are skipped rather than integrated, so an outage does not invent energy; counters persist to `<storage>/enphaseEnvoyMatter/gridEnergy_<host>.json` and are restored on start, since Matter treats cumulative energy as monotonic.
+- This is a Riemann sum at the polling rate and is an approximation, unlike the production and consumption counters which are the gateway's own measurements. Reading the gateway's hardware import/export registers would be strictly better if they prove available.
+
+### Changed
+
+- `energyDeviceTypes` now also covers the grid sensor, which uses `ElectricalMeter` (0x0514) — the spec's "meters the electrical energy being imported and/or exported", which describes the grid connection more exactly than it does house load.
+- `buildClusters` keys off the measurement kind rather than a single direction, so one endpoint can declare both cumulative directions. Homebridge picks the feature-gated energy features from what is declared at registration, so the grid sensor declares both up front even when one side is still zero.
+
 ## [1.2.0] - (17.08.2026)
 
 ### Added

@@ -5,7 +5,7 @@
  *
  * It does exactly two things:
  *   1. authenticate (JWT for firmware v7+, no auth or Digest for older), and
- *   2. read whole-system solar production and home consumption.
+ *   2. read whole-system solar production, home consumption and grid flow.
  *
  * Everything else the gateway exposes — inverters, batteries, Ensemble, grid
  * profiles, meter configuration — is deliberately out of scope.
@@ -17,6 +17,7 @@ import EventEmitter from 'events';
 import { promises as fsPromises } from 'fs';
 import { XMLParser } from 'fast-xml-parser';
 import DigestAuth from './digestauth.js';
+import GridEnergy from './gridenergy.js';
 import EnvoyToken from './envoytoken.js';
 import { ApiUrls, Authorization, PartNumbers, MeasurementKind } from './constants.js';
 
@@ -49,6 +50,11 @@ class EnvoyClient extends EventEmitter {
         this.envoyPasswd = config.envoyPasswd;
         this.tokenFile = config.tokenFile;
 
+        // Grid import/export has to be accumulated as we watch — see gridenergy.js.
+        this.gridEnergy = config.gridFile
+            ? new GridEnergy({ file: config.gridFile, maxGapMs: config.gridMaxGapMs })
+            : null;
+
         this.info = null;
         this.token = null;
         this.cookie = null;
@@ -76,6 +82,11 @@ class EnvoyClient extends EventEmitter {
      * Throws on any failure so the caller can retry the whole cycle.
      */
     async connect() {
+        if (this.gridEnergy) {
+            const restored = await this.gridEnergy.load();
+            this.emit('debug', restored ? 'Restored grid energy counters from disk' : 'No stored grid energy counters, starting from zero');
+        }
+
         this.info = await this.getInfo();
 
         const tokenRequired = this.info.webTokens || this.tokenMode > TokenMode.None;
@@ -319,8 +330,53 @@ class EnvoyClient extends EventEmitter {
 
         return {
             production: this.applyEnergyFloor(MeasurementKind.Production, production),
-            consumption: this.applyEnergyFloor(MeasurementKind.Consumption, consumption)
+            consumption: this.applyEnergyFloor(MeasurementKind.Consumption, consumption),
+            grid: this.readGrid(stats, production, consumption)
         };
+    }
+
+    /**
+     * Grid flow: what actually crosses the service entrance.
+     *
+     * Neither production nor house load answers this on its own — solar consumed
+     * on site never touches the grid — so without this a controller has no way to
+     * work out grid use.
+     *
+     * Power comes from the net-consumption CT where the gateway has one, since
+     * that is a direct measurement; otherwise it is derived as load minus
+     * production, which is the same quantity by conservation. Energy is
+     * accumulated from those samples, because the gateway reports lifetime net
+     * as a single signed figure that cannot be split back into the two
+     * directions Matter wants.
+     *
+     * @returns {object|null} `{ power, energyImported, energyExported, voltage }`
+     */
+    readGrid(stats, production, consumption) {
+        if (!this.gridEnergy) return null;
+
+        const entries = Array.isArray(stats?.consumption) ? stats.consumption : [];
+        const net = entries.find((entry) => entry?.measurementType === 'net-consumption');
+
+        const measured = net ? this.toReading(net) : null;
+        const power = measured && isNumber(measured.power)
+            ? measured.power
+            : this.subtractOrNull(consumption?.power, production?.power);
+
+        if (!isNumber(power)) return null;
+
+        const { imported, exported } = this.gridEnergy.sample(power);
+        return {
+            power,
+            energyImported: imported,
+            energyExported: exported,
+            voltage: measured?.voltage ?? null,
+            current: null
+        };
+    }
+
+    /** Persist the grid counters so a restart does not rewind them. */
+    async saveGridEnergy() {
+        if (this.gridEnergy) await this.gridEnergy.save();
     }
 
     /**
@@ -400,6 +456,10 @@ class EnvoyClient extends EventEmitter {
 
     addOrNull(a, b) {
         return isNumber(a) && isNumber(b) ? a + b : null;
+    }
+
+    subtractOrNull(a, b) {
+        return isNumber(a) && isNumber(b) ? a - b : null;
     }
 
     /** Hold cumulative energy at its high-water mark. See `energyFloor`. */

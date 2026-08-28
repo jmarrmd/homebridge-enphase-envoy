@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `homebridge-enphase-envoy-matter` — a Homebridge plugin that publishes solar production and home consumption from an Enphase Envoy / IQ Gateway as **Matter electrical sensors**, so they appear in the Apple Home Energy view on iOS 27 and later. Supports gateway firmware v5–v8.
 
-The plugin is deliberately narrow: two sensors per gateway, nothing else. It registers **no HomeKit/HAP accessories** — HAP has no power or energy characteristic, so it cannot drive the Energy view.
+The plugin is deliberately narrow: three sensors per gateway, nothing else. It registers **no HomeKit/HAP accessories** — HAP has no power or energy characteristic, so it cannot drive the Energy view.
 
 It is a reduced derivative of `homebridge-enphase-envoy` v10.7.7 (whose history is still in [CHANGELOG.md](CHANGELOG.md)) and is **designed to run alongside it, not replace it**. The plugin name, platform alias (`enphaseEnvoyMatter`), child bridge and token cache directory are all deliberately distinct — see `PluginName` / `PlatformName` / `StorageDir` in [src/constants.js](src/constants.js). Do not "align" these back to the original's values; the divergence is load-bearing.
 
@@ -35,6 +35,7 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 |------|------|
 | [index.js](index.js) | Platform + per-device orchestration: config validation, connect/retry, poll loop, cached-accessory cleanup |
 | [src/envoyclient.js](src/envoyclient.js) | Auth (JWT for v7+, Digest for v5/v6) and the two data endpoints; normalizes readings |
+| [src/gridenergy.js](src/gridenergy.js) | Integrates signed grid power into the two monotonic counters Matter needs; persists them |
 | [src/matterenergy.js](src/matterenergy.js) | Matter cluster mapping and registration; all `api.matter` use lives here |
 | [src/constants.js](src/constants.js) | Endpoint paths, part-number → model map, plugin identifiers |
 | [src/envoytoken.js](src/envoytoken.js) | JWT generation via Enlighten credentials |
@@ -47,6 +48,7 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 - Device type: `api.matter.deviceTypes.ElectricalSensor` (0x0510)
 - Production: `activePower` + `cumulativeEnergyExported`
 - Consumption: `activePower` + `cumulativeEnergyImported`
+- Grid: `activePower` (signed) + **both** cumulative directions on one endpoint
 - **All values are milli-units** (mV / mA / mW / mWh) — multiply by 1000
 - Homebridge derives the mandatory attributes itself (`powerMode`, `numberOfMeasurementTypes`, `accuracy`, PowerTopology) and picks the feature-gated `ElectricalEnergyMeasurement` features from which energy attributes are declared at registration. Declare only the readings.
 - Declare every power attribute at registration (null where unknown), because features are detected from what is declared then, not from later updates.

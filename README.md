@@ -98,7 +98,7 @@ Configure through the Homebridge UI, or add a platform block by hand:
 | `productionName` | `<name> Solar Production` | Name of the production sensor. |
 | `consumptionEnabled` | `true` | Publish the home consumption sensor. |
 | `consumptionName` | `<name> Home Consumption` | Name of the consumption sensor. |
-| `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Experimental — see below. |
+| `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Confirmed working — see below. |
 | `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
 | `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
 
@@ -115,7 +115,7 @@ The plugin detects which is needed from `/info.xml`, and falls back to the other
 
 By default both sensors are published as Matter `ElectricalSensor` (0x0510). A controller classifies an endpoint from its **DeviceTypeList**, and `ElectricalSensor` is a **utility** class device type — per the Matter spec, not something meant to stand alone as a device. With both endpoints carrying only that, the Apple Home app may not treat them as two separate devices, and adds them together on the summary tile. The individual values are still correct one level down.
 
-The import/export direction of the energy attributes does *not* change this. Only the device type does.
+The two settings do different jobs, and you need both: the **device type** is what makes each sensor a separate device, and the **import/export direction** is what decides which column its energy lands in (Exported vs Grid Use).
 
 Setting `"energyDeviceTypes": true` publishes each sensor with the application-class device type that matches what it actually is:
 
@@ -128,10 +128,10 @@ Not `ElectricalUtilityMeter` (0x0511): despite the name it models the utility *a
 
 Homebridge still attaches the power and energy clusters from the declared state and additionally advertises `ElectricalSensor` as a secondary type, so each endpoint lists both — the shape the Matter specification describes.
 
-Two caveats, both real:
+One caveat remains:
 
 - **Homebridge does not expose these device types.** Its `api.matter.deviceTypes` list covers 38 entries and omits the energy types, so the plugin reaches into matter.js (installed alongside Homebridge) to get them. If that fails the plugin logs which resolution paths it tried and falls back to `ElectricalSensor` — it never breaks.
-- **Whether the Home app honours them is unconfirmed.** Treat the option as an experiment; turn it off if it does not help.
+- **The Home app does honour them** (confirmed on an iOS 27 beta, August 2026). Production appears as its own device in Electricity Usage, with its energy counted as *exported* — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Both the device type and the export/import direction matter: the type is what makes it a separate device, the direction is what puts the energy in the Exported column rather than Grid Use.
 
 Changing this option changes the endpoint's structure, so Homebridge tears the accessory down and rebuilds it. Expect a re-registration in the log, and re-pair the Matter bridge if a controller does not pick up the change.
 

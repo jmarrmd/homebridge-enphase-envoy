@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `homebridge-enphase-envoy-matter` v1.0.0 is a reduced derivative of `homebridge-enphase-envoy` v10.7.7. It ships under a different package name and platform alias so the two install side by side. The v10 and earlier entries below are the history of the original plugin, kept for reference.
 
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
+- **Status:** `energyDeviceTypes` is confirmed working on an iOS 27 beta (August 2026). Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
 ## [1.2.0] - (17.08.2026)
 

@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.3.2] - (31.08.2026)
+
+### Fixed
+
+- **Grid counters are now saved atomically.** `save()` wrote straight over `gridEnergy_<host>.json`, so a crash or power cut mid-write could leave a truncated file. `load()` then failed to parse it and started both counters from zero. Because Matter treats cumulative energy as monotonic, a controller sees that as the counter going backwards and may discard readings until it climbs past its previous high-water mark — invisible for days, and asymmetric: export recovers quickly because its total is small, while import stays suppressed. Saves now write to a temporary file and rename it over the real one, which is atomic within a filesystem, so an interrupted save leaves the previous good file.
+- **A failed load is reported instead of being swallowed.** `load()` returned a bare `false` for both "no file yet" and "file is corrupt", and only the first was logged, at debug. It now distinguishes the two and warns on the second, naming the parse error and what it means for the Home app.
+- **A failed save is reported.** Previously silent. A one-off failure costs nothing, but a persistent one rewinds the counters on every restart, so the first is a warning and the rest go to debug.
+
+### Changed
+
+- The debug log line now includes grid power and both counters, so it is possible to tell a stalled counter from one the controller is ignoring without reading the file off disk.
+
 ## [1.3.0] - (28.08.2026)
 
 ### Added

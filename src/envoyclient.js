@@ -54,6 +54,7 @@ class EnvoyClient extends EventEmitter {
         this.gridEnergy = config.gridFile
             ? new GridEnergy({ file: config.gridFile, maxGapMs: config.gridMaxGapMs })
             : null;
+        this.warnedGridSave = false;
 
         this.info = null;
         this.token = null;
@@ -83,8 +84,14 @@ class EnvoyClient extends EventEmitter {
      */
     async connect() {
         if (this.gridEnergy) {
-            const restored = await this.gridEnergy.load();
-            this.emit('debug', restored ? 'Restored grid energy counters from disk' : 'No stored grid energy counters, starting from zero');
+            const { status, error } = await this.gridEnergy.load();
+            if (status === 'unreadable') {
+                this.emit('warn', `Stored grid energy counters could not be read (${error}). Import and export restart from zero, so the Home app may ignore grid energy until each counter passes its previous total.`);
+            } else {
+                this.emit('debug', status === 'restored'
+                    ? 'Restored grid energy counters from disk'
+                    : 'No stored grid energy counters, starting from zero');
+            }
         }
 
         this.info = await this.getInfo();
@@ -376,7 +383,20 @@ class EnvoyClient extends EventEmitter {
 
     /** Persist the grid counters so a restart does not rewind them. */
     async saveGridEnergy() {
-        if (this.gridEnergy) await this.gridEnergy.save();
+        if (!this.gridEnergy) return;
+
+        const error = await this.gridEnergy.save();
+        if (!error) return;
+
+        // Warn once, then debug. A failing save repeats every poll, and the
+        // consequence — a rewind on the next restart — is the same each time.
+        const message = `Could not save grid energy counters: ${error}`;
+        if (this.warnedGridSave) {
+            this.emit('debug', message);
+        } else {
+            this.warnedGridSave = true;
+            this.emit('warn', message);
+        }
     }
 
     /**

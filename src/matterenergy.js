@@ -68,7 +68,9 @@ import { PluginName, PlatformName, MeasurementKind } from './constants.js';
 const ENERGY_DEVICE_TYPES = {
     [MeasurementKind.Production]: { module: 'solar-power', exportName: 'SolarPowerDevice' },
     [MeasurementKind.Consumption]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
-    [MeasurementKind.Grid]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
+    [MeasurementKind.Grid]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
+    [MeasurementKind.GridImport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
+    [MeasurementKind.GridExport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
 };
 
 /**
@@ -119,6 +121,23 @@ function resolveMatterDevice(moduleName, exportName) {
 
 /** Matter uses milli-units for electrical measurements. */
 const milli = (value) => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) : null);
+
+/**
+ * Active power for one sensor.
+ *
+ * Grid power is signed: positive drawing from the utility, negative pushing
+ * back. A split grid endpoint reports only its own direction and zero when
+ * flow is the other way, so it reads exactly like production and consumption
+ * do — a positive number whose direction is fixed by the endpoint rather than
+ * carried in the sign. The combined endpoint keeps the signed value.
+ */
+const powerFor = (kind, reading) => {
+    const power = reading?.power;
+    if (typeof power !== 'number' || !Number.isFinite(power)) return power;
+    if (kind === MeasurementKind.GridImport) return Math.max(0, power);
+    if (kind === MeasurementKind.GridExport) return Math.max(0, -power);
+    return power;
+};
 
 /**
  * Cumulative energy updates are delivered to controllers as Matter events and
@@ -191,7 +210,7 @@ class MatterEnergyBridge {
             electricalPowerMeasurement: {
                 voltage: milli(reading?.voltage),
                 activeCurrent: milli(reading?.current),
-                activePower: milli(reading?.power)
+                activePower: milli(powerFor(kind, reading))
             },
             electricalEnergyMeasurement: this.energyFor(kind, reading)
         };
@@ -200,8 +219,13 @@ class MatterEnergyBridge {
     /**
      * Which cumulative energy attributes a sensor declares. Homebridge picks the
      * feature-gated ElectricalEnergyMeasurement features from exactly this, at
-     * registration — so the grid sensor must declare both directions up front
-     * even when one of them is still zero, or it could never report that side.
+     * registration, so whatever a sensor declares here is all it can ever report.
+     *
+     * The combined grid endpoint declares both directions. That is legal, and
+     * Homebridge writes both without error, but on an iOS 27 beta the Home app
+     * showed only the exported half — measured against 68 kWh of import sitting
+     * correct on disk. Splitting the two into their own endpoints, each with a
+     * single direction, is what `gridSplit` does and why it is the default.
      */
     energyFor(kind, reading) {
         if (kind === MeasurementKind.Grid) {
@@ -209,6 +233,12 @@ class MatterEnergyBridge {
                 cumulativeEnergyImported: { energy: milli(reading?.energyImported) ?? 0 },
                 cumulativeEnergyExported: { energy: milli(reading?.energyExported) ?? 0 }
             };
+        }
+        if (kind === MeasurementKind.GridImport) {
+            return { cumulativeEnergyImported: { energy: milli(reading?.energyImported) ?? 0 } };
+        }
+        if (kind === MeasurementKind.GridExport) {
+            return { cumulativeEnergyExported: { energy: milli(reading?.energyExported) ?? 0 } };
         }
 
         // The array delivers energy; the house draws it.

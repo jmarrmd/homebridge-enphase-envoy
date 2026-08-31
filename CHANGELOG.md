@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.4.0] - (31.08.2026)
+
+### Changed
+
+- **The grid sensor is now published as two one-directional endpoints** — `<name> Grid Import` and `<name> Grid Export` — instead of one endpoint declaring both cumulative directions. Set `gridSplit: false` to restore the old shape.
+
+  A single endpoint declaring both directions is legal Matter, Homebridge writes both attributes without error, and nothing appears in the log. But on an iOS 27 beta (August 2026) the Home app read only the exported half and silently ignored import. Measured on a live gateway: 68 kWh of import accumulated correctly on disk and climbing at ~885 W, against essentially nothing in Electricity Usage, while export tracked correctly. Two one-directional endpoints match the shape of the production and consumption sensors, which the Home app has always handled correctly.
+
+  The trade is an extra tile in the Home app, and grid history restarts because the endpoints are new. This is a workaround for observed controller behaviour, not a spec fix — the tags that would state a direction explicitly (`Descriptor.TagList`, Commodity Tariff Flow `0x13`) cannot be set by a Homebridge plugin.
+
+- Each grid endpoint reports a positive `activePower` for its own direction and zero when flow is the other way, rather than one signed value. The combined endpoint keeps the signed figure when `gridSplit` is off.
+
 ## [1.3.2] - (31.08.2026)
 
 ### Fixed

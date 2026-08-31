@@ -144,6 +144,10 @@ class EnvoyEnergyDevice {
         this.consumptionName = config.consumptionName || `${name} Home Consumption`;
         this.gridName = config.gridName || `${name} Grid`;
 
+        // Apple's iOS 27 Energy view reads only the export half of an endpoint
+        // that declares both grid directions, so publish them separately.
+        this.gridSplit = config.gridSplit ?? true;
+
         this.client = new EnvoyClient({
             host,
             tokenMode,
@@ -239,7 +243,10 @@ class EnvoyEnergyDevice {
             this.log.info(`${this.prefix}Gateway reports no consumption data (no consumption CTs installed) — consumption sensor not published.`);
         }
 
-        if (this.gridEnabled && reading.grid) {
+        if (this.gridEnabled && reading.grid && this.gridSplit) {
+            sensors.push({ kind: MeasurementKind.GridImport, displayName: `${this.gridName} Import`, reading: reading.grid });
+            sensors.push({ kind: MeasurementKind.GridExport, displayName: `${this.gridName} Export`, reading: reading.grid });
+        } else if (this.gridEnabled && reading.grid) {
             sensors.push({ kind: MeasurementKind.Grid, displayName: this.gridName, reading: reading.grid });
         } else if (this.gridEnabled && this.logLevel.info) {
             this.log.info(`${this.prefix}Cannot determine grid flow — needs either a net-consumption CT or both production and consumption. Grid sensor not published.`);
@@ -258,7 +265,11 @@ class EnvoyEnergyDevice {
             await Promise.all([
                 this.matter.update(MeasurementKind.Production, reading.production),
                 this.matter.update(MeasurementKind.Consumption, reading.consumption),
-                this.matter.update(MeasurementKind.Grid, reading.grid)
+                // All three take the same grid reading; update() no-ops for
+                // whichever kinds were not registered.
+                this.matter.update(MeasurementKind.Grid, reading.grid),
+                this.matter.update(MeasurementKind.GridImport, reading.grid),
+                this.matter.update(MeasurementKind.GridExport, reading.grid)
             ]);
 
             // Cheap when nothing changed, and the counters are only as good as

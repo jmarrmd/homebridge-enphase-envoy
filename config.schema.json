@@ -143,6 +143,16 @@
                                 "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
                             }
                         },
+                        "gridSplit": {
+                            "title": "Publish grid as two sensors",
+                            "type": "boolean",
+                            "default": true,
+                            "required": false,
+                            "description": "Publish grid import and grid export as two separate one-directional sensors instead of one sensor carrying both. A single endpoint declaring both directions is legal Matter and Homebridge writes both without error, but on an iOS 27 beta (August 2026) the Home app showed only the exported half and silently ignored import. Two one-directional endpoints match the shape of the production and consumption sensors, which Home handles correctly. Turning this off restores the single combined sensor.",
+                            "condition": {
+                                "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
+                            }
+                        },
                         "energyDeviceTypes": {
                             "title": "Use Matter energy device types",
                             "type": "boolean",
@@ -233,6 +243,7 @@
                         "devices[].consumptionName",
                         "devices[].gridEnabled",
                         "devices[].gridName",
+                        "devices[].gridSplit",
                         "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]

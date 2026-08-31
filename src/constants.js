@@ -69,5 +69,14 @@ export const PartNumbers = {
 export const MeasurementKind = {
     Production: 'production',
     Consumption: 'consumption',
-    Grid: 'grid'
+
+    // One endpoint carrying both grid directions. Apple's iOS 27 Energy view
+    // reads only the export half of such an endpoint, so this is no longer the
+    // default — see GridImport / GridExport and `gridSplit` in the README.
+    Grid: 'grid',
+
+    // The same grid flow as two one-directional endpoints, each shaped like
+    // production and consumption: a fixed direction and a positive power.
+    GridImport: 'gridImport',
+    GridExport: 'gridExport'
 };

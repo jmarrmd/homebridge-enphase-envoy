@@ -32,7 +32,9 @@
  * -----------
  * Counters are restored from disk on start. Matter treats cumulative energy as
  * monotonic, so a restart that reset them to zero would make the counters jump
- * backwards and corrupt the Home app's history.
+ * backwards and corrupt the Home app's history. Saves are therefore atomic
+ * (write to a temporary file, then rename over the real one), and a failed
+ * load is reported rather than silently treated as a fresh start.
  */
 
 import { promises as fsPromises } from 'fs';
@@ -58,30 +60,73 @@ class GridEnergy {
         this.dirty = false;
     }
 
-    /** Restore counters written by a previous run. Absent or unreadable = start at zero. */
+    /**
+     * Restore counters written by a previous run.
+     *
+     * A missing file is an ordinary first run. Anything else — unparseable
+     * JSON, unreadable file, numbers that are not numbers — silently rewinds
+     * both counters to zero, which a controller sees as a monotonic counter
+     * going backwards. It has no way to tell that from a fault, so it may
+     * discard readings until the counter climbs past its old high-water mark.
+     * That is invisible for days, so say so rather than swallowing it.
+     *
+     * @returns {Promise<{status: 'restored'|'absent'|'unreadable', error: string|null}>}
+     */
     async load() {
+        let raw;
         try {
-            const saved = JSON.parse(await fsPromises.readFile(this.file, 'utf8'));
-            if (isNumber(saved.imported)) this.imported = saved.imported;
-            if (isNumber(saved.exported)) this.exported = saved.exported;
-            return true;
-        } catch {
-            return false;
+            raw = await fsPromises.readFile(this.file, 'utf8');
+        } catch (error) {
+            if (error.code === 'ENOENT') return { status: 'absent', error: null };
+            return { status: 'unreadable', error: error.message ?? String(error) };
         }
+
+        let saved;
+        try {
+            saved = JSON.parse(raw);
+        } catch (error) {
+            return { status: 'unreadable', error: error.message ?? String(error) };
+        }
+
+        const imported = isNumber(saved?.imported);
+        const exported = isNumber(saved?.exported);
+        if (!imported && !exported) {
+            return { status: 'unreadable', error: 'no usable counters in the stored file' };
+        }
+
+        if (imported) this.imported = saved.imported;
+        if (exported) this.exported = saved.exported;
+        return { status: 'restored', error: null };
     }
 
+    /**
+     * Persist the counters, writing to a temporary file and renaming it over
+     * the real one. Rename is atomic within a filesystem, so a crash or power
+     * cut mid-save leaves the previous good file instead of a half-written one
+     * — a truncated file would fail to parse on the next start and rewind both
+     * counters to zero.
+     *
+     * @returns {Promise<string|null>} an error message if the save failed
+     */
     async save() {
-        if (!this.dirty) return;
+        if (!this.dirty) return null;
+
+        const temp = `${this.file}.tmp`;
         try {
-            await fsPromises.writeFile(this.file, JSON.stringify({
+            await fsPromises.writeFile(temp, JSON.stringify({
                 imported: this.imported,
                 exported: this.exported,
                 savedAt: new Date().toISOString()
             }, null, 2));
+            await fsPromises.rename(temp, this.file);
             this.dirty = false;
-        } catch {
-            // A failed save costs accuracy across a restart, never correctness
-            // of the running counters; the next save will try again.
+            return null;
+        } catch (error) {
+            // A single failed save costs accuracy across a restart, never
+            // correctness of the running counters, and the next save retries.
+            // A persistent one rewinds them on every restart, so report it.
+            await fsPromises.rm(temp, { force: true }).catch(() => {});
+            return error.message ?? String(error);
         }
     }
 

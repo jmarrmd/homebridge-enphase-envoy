@@ -10,7 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `homebridge-enphase-envoy-matter` v1.0.0 is a reduced derivative of `homebridge-enphase-envoy` v10.7.7. It ships under a different package name and platform alias so the two install side by side. The v10 and earlier entries below are the history of the original plugin, kept for reference.
 
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
-- **Status:** `energyDeviceTypes` is confirmed working on an iOS 27 beta (August 2026). Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
+- **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
+
+## [1.3.2] - (31.08.2026)
+
+### Fixed
+
+- **Grid counters are now saved atomically.** `save()` wrote straight over `gridEnergy_<host>.json`, so a crash or power cut mid-write could leave a truncated file. `load()` then failed to parse it and started both counters from zero. Because Matter treats cumulative energy as monotonic, a controller sees that as the counter going backwards and may discard readings until it climbs past its previous high-water mark — invisible for days, and asymmetric: export recovers quickly because its total is small, while import stays suppressed. Saves now write to a temporary file and rename it over the real one, which is atomic within a filesystem, so an interrupted save leaves the previous good file.
+- **A failed load is reported instead of being swallowed.** `load()` returned a bare `false` for both "no file yet" and "file is corrupt", and only the first was logged, at debug. It now distinguishes the two and warns on the second, naming the parse error and what it means for the Home app.
+- **A failed save is reported.** Previously silent. A one-off failure costs nothing, but a persistent one rewinds the counters on every restart, so the first is a warning and the rest go to debug.
+
+### Changed
+
+- The debug log line now includes grid power and both counters, so it is possible to tell a stalled counter from one the controller is ignoring without reading the file off disk.
 
 ## [1.3.0] - (28.08.2026)
 
@@ -19,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Grid sensor** (`gridEnabled`, default `true`): reports what crosses the service entrance, carrying both `cumulativeEnergyImported` and `cumulativeEnergyExported` on one endpoint. Neither production nor house load answers this on its own — solar consumed on site never touches the grid — which is why the Home app previously showed a house-load total with no grid figure.
 - Grid power is read from the `net-consumption` CT where the gateway has one, and otherwise derived as `house load − production`.
 - Grid energy is accumulated by the plugin (`src/gridenergy.js`), because the gateway reports lifetime net as a single signed figure that cannot be split back into two directions. Trapezoidal integration, split at the zero crossing when flow reverses mid-interval; intervals longer than five polls are skipped rather than integrated, so an outage does not invent energy; counters persist to `<storage>/enphaseEnvoyMatter/gridEnergy_<host>.json` and are restored on start, since Matter treats cumulative energy as monotonic.
-- This is a Riemann sum at the polling rate and is an approximation, unlike the production and consumption counters which are the gateway's own measurements. Reading the gateway's hardware import/export registers would be strictly better if they prove available.
+- This is a Riemann sum at the polling rate and is an approximation, unlike the production and consumption counters which are the gateway's own measurements. Integrating is nonetheless the only thing that can work: the import/export split needs the time series and is not recoverable from any lifetime register. See the README for the gateway data this was checked against.
 
 ### Changed
 

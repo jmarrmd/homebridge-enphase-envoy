@@ -22,6 +22,9 @@ const DEFAULT_REFRESH_SECONDS = 30;
 const MIN_REFRESH_SECONDS = 5;
 const CONNECT_RETRY_MS = 120_000;
 
+/** Watt-hours for the debug log: enough precision to see a counter advance. */
+const wh = (value) => (typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} Wh` : '-');
+
 class EnvoyPlatform {
     constructor(log, config, api) {
         this.log = log;
@@ -263,7 +266,7 @@ class EnvoyEnergyDevice {
             await this.client.saveGridEnergy();
 
             if (this.logLevel.debug) {
-                this.log.info(`${this.prefix}debug: production ${reading.production?.power ?? '-'} W, consumption ${reading.consumption?.power ?? '-'} W`);
+                this.log.info(`${this.prefix}debug: production ${reading.production?.power ?? '-'} W, consumption ${reading.consumption?.power ?? '-'} W, grid ${reading.grid?.power ?? '-'} W (imported ${wh(reading.grid?.energyImported)}, exported ${wh(reading.grid?.energyExported)})`);
             }
         } catch (error) {
             if (this.logLevel.error) {

@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.5.0] - (03.09.2026)
+
+### Added
+
+- **Cumulative energy now carries `endTimestamp`**, so a controller can place each reading in time instead of inferring it from when the packet arrived. Unix seconds — matter.js's `TlvEpochS` converts to the Matter epoch (2000-01-01) itself, so no manual offset.
+- **A heartbeat republishes an unchanged total every five minutes.** A controller derives each hourly bar by differencing the cumulative counter, so it cannot close a bucket without a reading at or after that bucket's end. Previously a counter that stopped moving went silent — solar overnight — and its buckets sat "in progress" until sunrise. Changed totals are still rate-limited to once a minute as before.
+
+### Changed
+
+- Change detection now compares the energy totals alone. `endTimestamp` moves every poll, so comparing the whole struct would have made every reading look new and defeated the rate limit.
+
+### Notes
+
+- `startTimestamp` and `startSystime` are deliberately **not** sent. The Matter spec states both "shall be omitted" for cumulative energy — a cumulative reading is a total *as of* an instant, not a measurement spanning a period. `endSystime` is also omitted, which the spec permits once the server knows UTC. An earlier plan to use `startTimestamp` to signal a counter restart was wrong on this point; the spec's mechanism for that is the separate `CumulativeEnergyReset` attribute, which Homebridge's typed cluster state does not currently expose.
+
 ## [1.4.0] - (31.08.2026)
 
 ### Changed

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `homebridge-enphase-envoy-matter` — a Homebridge plugin that publishes solar production and home consumption from an Enphase Envoy / IQ Gateway as **Matter electrical sensors**, so they appear in the Apple Home Energy view on iOS 27 and later. Supports gateway firmware v5–v8.
 
-The plugin is deliberately narrow: three sensors per gateway, nothing else. It registers **no HomeKit/HAP accessories** — HAP has no power or energy characteristic, so it cannot drive the Energy view.
+The plugin is deliberately narrow: four sensors per gateway (production, consumption, grid import, grid export), nothing else. It registers **no HomeKit/HAP accessories** — HAP has no power or energy characteristic, so it cannot drive the Energy view.
 
 It is a reduced derivative of `homebridge-enphase-envoy` v10.7.7 (whose history is still in [CHANGELOG.md](CHANGELOG.md)) and is **designed to run alongside it, not replace it**. The plugin name, platform alias (`enphaseEnvoyMatter`), child bridge and token cache directory are all deliberately distinct — see `PluginName` / `PlatformName` / `StorageDir` in [src/constants.js](src/constants.js). Do not "align" these back to the original's values; the divergence is load-bearing.
 
@@ -48,12 +48,17 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 - Device type: `api.matter.deviceTypes.ElectricalSensor` (0x0510)
 - Production: `activePower` + `cumulativeEnergyExported`
 - Consumption: `activePower` + `cumulativeEnergyImported`
-- Grid: `activePower` (signed) + **both** cumulative directions on one endpoint
+- Grid import: `activePower` (positive when drawing, 0 when exporting) + `cumulativeEnergyImported`
+- Grid export: `activePower` (positive when pushing, 0 when importing) + `cumulativeEnergyExported`
+- Grid is **two one-directional endpoints** by default (`gridSplit`). One endpoint declaring both directions is legal Matter and Homebridge writes both without error, but the iOS 27 Home app read only the exported half and silently ignored import. `gridSplit: false` restores the combined endpoint.
 - **All values are milli-units** (mV / mA / mW / mWh) — multiply by 1000
 - Homebridge derives the mandatory attributes itself (`powerMode`, `numberOfMeasurementTypes`, `accuracy`, PowerTopology) and picks the feature-gated `ElectricalEnergyMeasurement` features from which energy attributes are declared at registration. Declare only the readings.
 - Declare every power attribute at registration (null where unknown), because features are detected from what is declared then, not from later updates.
 - Cumulative energy must be monotonic — `EnvoyClient` holds it at a high-water mark.
 - Energy updates are delivered as unthrottled Matter events; push them no more than once a minute.
+- Cumulative energy carries `endTimestamp` (Unix seconds — matter.js converts to the Matter epoch itself). Per the spec, `startTimestamp` and `startSystime` **shall be omitted** for cumulative energy, and `endSystime` may be omitted once UTC is known. Do not add them.
+- An unchanged total is republished every five minutes (`ENERGY_HEARTBEAT_INTERVAL`). A controller derives each hourly bar by differencing the counter, so it cannot close a bucket without a reading at or after the bucket's end — without the heartbeat, a counter that stops moving (solar overnight) leaves those buckets stuck "in progress".
+- Change detection compares the energy totals alone; `endTimestamp` moves every poll and would otherwise make every reading look new.
 
 ## Module System
 

@@ -123,6 +123,24 @@ function resolveMatterDevice(moduleName, exportName) {
 const milli = (value) => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) : null);
 
 /**
+ * Unix epoch seconds. matter.js's TlvEpochS accepts Unix time and converts to
+ * the Matter epoch (2000-01-01) itself, so do not offset it here.
+ */
+const nowEpochS = () => Math.floor(Date.now() / 1000);
+
+/**
+ * One cumulative EnergyMeasurementStruct.
+ *
+ * Only `endTimestamp` is carried. The Matter spec is explicit that for
+ * cumulative energy `startTimestamp` and `startSystime` "shall be omitted" —
+ * a cumulative reading is a total *as of* an instant, not a measurement over a
+ * period — and `endSystime` may be omitted once the server knows UTC, which we
+ * do. Carrying the end timestamp is what lets a controller place the reading in
+ * time rather than inferring it from when the packet happened to arrive.
+ */
+const cumulative = (wattHours, at) => ({ energy: milli(wattHours) ?? 0, endTimestamp: at });
+
+/**
  * Active power for one sensor.
  *
  * Grid power is signed: positive drawing from the utility, negative pushing
@@ -145,6 +163,24 @@ const powerFor = (kind, reading) => {
  * them no more often than this, independently of the power update cadence.
  */
 const ENERGY_UPDATE_INTERVAL = 60_000;
+
+/**
+ * How long an unchanged total may go unreported.
+ *
+ * A counter that stops moving — solar overnight — otherwise goes silent, and a
+ * controller cannot close an hourly bucket without a reading at or after the
+ * bucket's end. Republishing the unchanged total with a fresh endTimestamp lets
+ * those buckets close instead of sitting "in progress" until sunrise.
+ */
+const ENERGY_HEARTBEAT_INTERVAL = 300_000;
+
+/**
+ * Key for change detection: the energy totals alone. endTimestamp moves every
+ * poll, so comparing the whole struct would make every reading look new.
+ */
+const energyKey = (energy) => JSON.stringify(
+    Object.entries(energy).map(([name, measurement]) => [name, measurement?.energy])
+);
 
 class MatterEnergyBridge {
     /**
@@ -228,22 +264,24 @@ class MatterEnergyBridge {
      * single direction, is what `gridSplit` does and why it is the default.
      */
     energyFor(kind, reading) {
+        const at = nowEpochS();
+
         if (kind === MeasurementKind.Grid) {
             return {
-                cumulativeEnergyImported: { energy: milli(reading?.energyImported) ?? 0 },
-                cumulativeEnergyExported: { energy: milli(reading?.energyExported) ?? 0 }
+                cumulativeEnergyImported: cumulative(reading?.energyImported, at),
+                cumulativeEnergyExported: cumulative(reading?.energyExported, at)
             };
         }
         if (kind === MeasurementKind.GridImport) {
-            return { cumulativeEnergyImported: { energy: milli(reading?.energyImported) ?? 0 } };
+            return { cumulativeEnergyImported: cumulative(reading?.energyImported, at) };
         }
         if (kind === MeasurementKind.GridExport) {
-            return { cumulativeEnergyExported: { energy: milli(reading?.energyExported) ?? 0 } };
+            return { cumulativeEnergyExported: cumulative(reading?.energyExported, at) };
         }
 
         // The array delivers energy; the house draws it.
         const key = kind === MeasurementKind.Production ? 'cumulativeEnergyExported' : 'cumulativeEnergyImported';
-        return { [key]: { energy: milli(reading?.energyLifetime) ?? 0 } };
+        return { [key]: cumulative(reading?.energyLifetime, at) };
     }
 
     /**
@@ -343,12 +381,13 @@ class MatterEnergyBridge {
         const clusters = this.buildClusters(sensor.kind, reading);
         const updates = [matter.updateAccessoryState(sensor.uuid, 'electricalPowerMeasurement', clusters.electricalPowerMeasurement)];
 
-        // The grid sensor carries two counters, so compare the whole object.
-        const energy = JSON.stringify(clusters.electricalEnergyMeasurement);
+        const energy = energyKey(clusters.electricalEnergyMeasurement);
         const now = Date.now();
+        const changed = energy !== sensor.lastEnergy;
         const due = now - sensor.lastEnergyAt >= ENERGY_UPDATE_INTERVAL;
+        const heartbeat = now - sensor.lastEnergyAt >= ENERGY_HEARTBEAT_INTERVAL;
 
-        if (energy !== sensor.lastEnergy && due) {
+        if ((changed && due) || heartbeat) {
             sensor.lastEnergy = energy;
             sensor.lastEnergyAt = now;
             updates.push(matter.updateAccessoryState(sensor.uuid, 'electricalEnergyMeasurement', clusters.electricalEnergyMeasurement));

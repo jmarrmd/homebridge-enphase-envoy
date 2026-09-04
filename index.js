@@ -148,6 +148,12 @@ class EnvoyEnergyDevice {
         // that declares both grid directions, so publish them separately.
         this.gridSplit = config.gridSplit ?? true;
 
+        // Side-by-side controls for observing how the Home app treats an
+        // endpoint that declares both energy directions. Off by default: the
+        // extra sensors duplicate energy the real ones already report, and the
+        // solar one reports an import figure that is not true of the array.
+        this.experimentalSensors = config.experimentalSensors ?? false;
+
         this.client = new EnvoyClient({
             host,
             tokenMode,
@@ -246,13 +252,36 @@ class EnvoyEnergyDevice {
         if (this.gridEnabled && reading.grid && this.gridSplit) {
             sensors.push({ kind: MeasurementKind.GridImport, displayName: `${this.gridName} Import`, reading: reading.grid });
             sensors.push({ kind: MeasurementKind.GridExport, displayName: `${this.gridName} Export`, reading: reading.grid });
+
+            // The combined endpoint as a control, published next to the split
+            // pair so both shapes see the same flow at the same time.
+            if (this.experimentalSensors) {
+                sensors.push({ kind: MeasurementKind.Grid, displayName: `${this.gridName} Test`, reading: reading.grid });
+            }
         } else if (this.gridEnabled && reading.grid) {
             sensors.push({ kind: MeasurementKind.Grid, displayName: this.gridName, reading: reading.grid });
         } else if (this.gridEnabled && this.logLevel.info) {
             this.log.info(`${this.prefix}Cannot determine grid flow — needs either a net-consumption CT or both production and consumption. Grid sensor not published.`);
         }
 
+        if (this.experimentalSensors && this.productionEnabled && reading.production) {
+            sensors.push({
+                kind: MeasurementKind.ProductionCombined,
+                displayName: `${this.productionName} Test`,
+                reading: this.combinedProduction(reading)
+            });
+        }
+
         return sensors;
+    }
+
+    /**
+     * Production plus the house's grid import on one reading, for the
+     * experimental SolarPower endpoint. The import figure is the home's, not
+     * the array's — see MeasurementKind.ProductionCombined.
+     */
+    combinedProduction(reading) {
+        return { ...reading.production, energyImported: reading.grid?.energyImported ?? 0 };
     }
 
     async poll() {
@@ -269,7 +298,8 @@ class EnvoyEnergyDevice {
                 // whichever kinds were not registered.
                 this.matter.update(MeasurementKind.Grid, reading.grid),
                 this.matter.update(MeasurementKind.GridImport, reading.grid),
-                this.matter.update(MeasurementKind.GridExport, reading.grid)
+                this.matter.update(MeasurementKind.GridExport, reading.grid),
+                this.matter.update(MeasurementKind.ProductionCombined, this.combinedProduction(reading))
             ]);
 
             // Cheap when nothing changed, and the counters are only as good as

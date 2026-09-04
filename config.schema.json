@@ -153,6 +153,13 @@
                                 "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
                             }
                         },
+                        "experimentalSensors": {
+                            "title": "Publish experimental test sensors",
+                            "type": "boolean",
+                            "default": false,
+                            "required": false,
+                            "description": "Publishes two extra sensors alongside the real ones, purely to observe how the Home app treats an endpoint that declares both energy directions: \"<Grid name> Test\" (one endpoint carrying both grid directions) and \"<Solar name> Test\" (a SolarPower endpoint carrying production as export and the house's grid draw as import). Leave this off unless you are running that comparison. The extra sensors report energy the real ones already report, and the solar one's import figure is the home's, not the array's \u2014 it is deliberately not true of the device it sits on."
+                        },
                         "energyDeviceTypes": {
                             "title": "Use Matter energy device types",
                             "type": "boolean",
@@ -244,6 +251,7 @@
                         "devices[].gridEnabled",
                         "devices[].gridName",
                         "devices[].gridSplit",
+                        "devices[].experimentalSensors",
                         "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]

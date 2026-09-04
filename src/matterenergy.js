@@ -70,7 +70,8 @@ const ENERGY_DEVICE_TYPES = {
     [MeasurementKind.Consumption]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
     [MeasurementKind.Grid]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
     [MeasurementKind.GridImport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
-    [MeasurementKind.GridExport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
+    [MeasurementKind.GridExport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
+    [MeasurementKind.ProductionCombined]: { module: 'solar-power', exportName: 'SolarPowerDevice' }
 };
 
 /**
@@ -277,6 +278,15 @@ class MatterEnergyBridge {
         }
         if (kind === MeasurementKind.GridExport) {
             return { cumulativeEnergyExported: cumulative(reading?.energyExported, at) };
+        }
+
+        // Experiment only. Production as export, the house's grid draw as
+        // import, on one SolarPower endpoint — see MeasurementKind.
+        if (kind === MeasurementKind.ProductionCombined) {
+            return {
+                cumulativeEnergyExported: cumulative(reading?.energyLifetime, at),
+                cumulativeEnergyImported: cumulative(reading?.energyImported, at)
+            };
         }
 
         // The array delivers energy; the house draws it.

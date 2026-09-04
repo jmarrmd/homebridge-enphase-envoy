@@ -78,5 +78,12 @@ export const MeasurementKind = {
     // The same grid flow as two one-directional endpoints, each shaped like
     // production and consumption: a fixed direction and a positive power.
     GridImport: 'gridImport',
-    GridExport: 'gridExport'
+    GridExport: 'gridExport',
+
+    // Opt-in experiment (`experimentalSensors`): a SolarPower endpoint that
+    // also declares grid import, published alongside the real production
+    // sensor. Its import figure is deliberately not true of the array — it is
+    // the house's grid draw — so it exists only to observe how the Home app
+    // treats a two-directional SolarPower endpoint. Never published by default.
+    ProductionCombined: 'productionCombined'
 };

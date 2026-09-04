@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.6.0] - (04.09.2026)
+
+### Added
+
+- **`experimentalSensors`** (default `false`): publishes two extra sensors alongside the real ones, purely to observe how the Home app treats an endpoint declaring both energy directions.
+  - `<Grid name> Test` — the pre-1.4.0 combined grid endpoint, one endpoint carrying both directions with signed power. A known-negative control: on an iOS 27 beta the Home app read only its exported half.
+  - `<Solar name> Test` — a `SolarPower` (0x17) endpoint carrying production as export and the house's grid draw as import. Untested territory: the same two-directional shape, but on a device type whose tile already renders a `GRID USE` field.
+
+  Both publish next to the real sensors, so the two shapes see the same flow at the same time on the same fabric. The real four are untouched.
+
+  **Off by default, and it should stay off unless you are running that comparison.** The extra sensors report energy the real ones already report, and the solar one's import figure is the home's rather than the array's — deliberately not true of the device it sits on. Confirmed with iOS 27: the Home app keeps a per-device ledger and does not pool counters across devices, so nothing double-counts today; that is an observation about current behaviour, not a guarantee.
+
+### Notes
+
+- The split grid sensors are confirmed working on iOS 27 (September 2026): `Grid Import` shows real daily bars averaging 6 kWh, against essentially nothing before the split. The `GRID USE 0kWh` on the Solar Production tile is correct and permanent — that endpoint has no import counter, and the tile reports its own device's ledger rather than the home's.
+
 ## [1.5.0] - (03.09.2026)
 
 ### Added

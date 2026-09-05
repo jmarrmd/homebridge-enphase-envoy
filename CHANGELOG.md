@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.8.0] - (05.09.2026)
+
+### Added
+
+- **`resetHistoryPerSensor`**: per-sensor overrides of the reset generation, so a single sensor's history can be started over while every other sensor keeps its own. `{ "grid": 1 }` resets only the grid endpoint. An override replaces `resetHistory` for that sensor rather than adding to it.
+
+  This is the common case: a newly published sensor records its entire cumulative counter as one hour and wrecks the axis, but the sensors beside it hold days of good data that should not be discarded to fix it.
+
+### Changed
+
+- **Baselines are keyed by sensor and field, not by field alone.** Grid import, grid export and the combined grid endpoint all read the same two counters, so an offset applied once to the shared reading could not distinguish them — resetting one moved all three. Each sensor now carries its own baseline and its own generation, and `readingsByKind()` applies them per sensor before publishing.
+- A v1.7.0 baseline file is migrated on load rather than discarded, mapping its four field-keyed baselines onto every sensor that consumed them. Re-capturing at an unchanged generation would rewind counters the controller has already seen.
+- The poll loop fans out over the per-kind reading map instead of six hand-written `update()` calls.
+- `combinedProduction()` returns null when the gateway reports no production, rather than an object with only an import figure.
+- Sensors publishing under a reset identity are named once at startup, since it explains where their history in the Home app begins.
+
 ## [1.7.0] - (05.09.2026)
 
 ### Added

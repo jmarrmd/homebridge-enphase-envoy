@@ -36,6 +36,8 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 | [index.js](index.js) | Platform + per-device orchestration: config validation, connect/retry, poll loop, cached-accessory cleanup |
 | [src/envoyclient.js](src/envoyclient.js) | Auth (JWT for v7+, Digest for v5/v6) and the two data endpoints; normalizes readings |
 | [src/gridenergy.js](src/gridenergy.js) | Integrates signed grid power into the two monotonic counters Matter needs; persists them |
+| [src/baseline.js](src/baseline.js) | Publishes cumulative energy from when a sensor went live rather than from the gateway's lifetime total (`resetHistory`) |
+| [src/jsonstore.js](src/jsonstore.js) | Atomic JSON read/write shared by the grid counters and the baselines |
 | [src/matterenergy.js](src/matterenergy.js) | Matter cluster mapping and registration; all `api.matter` use lives here |
 | [src/constants.js](src/constants.js) | Endpoint paths, part-number → model map, plugin identifiers |
 | [src/envoytoken.js](src/envoytoken.js) | JWT generation via Enlighten credentials |
@@ -59,6 +61,7 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 - Cumulative energy carries `endTimestamp` (Unix seconds — matter.js converts to the Matter epoch itself). Per the spec, `startTimestamp` and `startSystime` **shall be omitted** for cumulative energy, and `endSystime` may be omitted once UTC is known. Do not add them.
 - An unchanged total is republished every five minutes (`ENERGY_HEARTBEAT_INTERVAL`). A controller derives each hourly bar by differencing the counter, so it cannot close a bucket without a reading at or after the bucket's end — without the heartbeat, a counter that stops moving (solar overnight) leaves those buckets stuck "in progress".
 - Change detection compares the energy totals alone; `endTimestamp` moves every poll and would otherwise make every reading look new.
+- `resetHistory` (default 0) folds a generation into each accessory's UUID and serial number and publishes cumulative energy from a baseline captured at first sight. Bumping it starts the controller's history over; leaving it alone publishes the gateway's lifetime totals unchanged. Never re-capture baselines on an existing generation — that rewinds counters the controller has already seen.
 
 ## Module System
 

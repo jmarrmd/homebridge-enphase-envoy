@@ -153,6 +153,14 @@
                                 "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
                             }
                         },
+                        "resetHistory": {
+                            "title": "Reset energy history (generation)",
+                            "type": "integer",
+                            "default": 0,
+                            "minimum": 0,
+                            "required": false,
+                            "description": "Increase this number to start the Home app's energy history over. The sensors are republished under new identities, so the Home app treats them as new devices, and cumulative energy is published from zero instead of from the gateway's lifetime total. Use it when a sensor's history is unusable \u2014 for example when a newly added sensor recorded its entire lifetime counter as a single hour, which sets the chart axis and makes every real bar beside it unreadable. Leave at 0 to keep publishing the gateway's own lifetime totals. The old sensors and their history stay in the Home app under their previous identity until you remove them there; the new ones start empty and need a day of data before they appear in Electricity Usage."
+                        },
                         "experimentalSensors": {
                             "title": "Publish experimental test sensors",
                             "type": "boolean",
@@ -252,6 +260,7 @@
                         "devices[].gridName",
                         "devices[].gridSplit",
                         "devices[].experimentalSensors",
+                        "devices[].resetHistory",
                         "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]

@@ -37,7 +37,7 @@
  * load is reported rather than silently treated as a fresh start.
  */
 
-import { promises as fsPromises } from 'fs';
+import { readJsonFile, writeJsonFileAtomic } from './jsonstore.js';
 
 const MS_PER_HOUR = 3_600_000;
 
@@ -73,29 +73,17 @@ class GridEnergy {
      * @returns {Promise<{status: 'restored'|'absent'|'unreadable', error: string|null}>}
      */
     async load() {
-        let raw;
-        try {
-            raw = await fsPromises.readFile(this.file, 'utf8');
-        } catch (error) {
-            if (error.code === 'ENOENT') return { status: 'absent', error: null };
-            return { status: 'unreadable', error: error.message ?? String(error) };
-        }
+        const { status, data, error } = await readJsonFile(this.file);
+        if (status !== 'ok') return { status: status === 'absent' ? 'absent' : 'unreadable', error };
 
-        let saved;
-        try {
-            saved = JSON.parse(raw);
-        } catch (error) {
-            return { status: 'unreadable', error: error.message ?? String(error) };
-        }
-
-        const imported = isNumber(saved?.imported);
-        const exported = isNumber(saved?.exported);
+        const imported = isNumber(data?.imported);
+        const exported = isNumber(data?.exported);
         if (!imported && !exported) {
             return { status: 'unreadable', error: 'no usable counters in the stored file' };
         }
 
-        if (imported) this.imported = saved.imported;
-        if (exported) this.exported = saved.exported;
+        if (imported) this.imported = data.imported;
+        if (exported) this.exported = data.exported;
         return { status: 'restored', error: null };
     }
 
@@ -111,23 +99,16 @@ class GridEnergy {
     async save() {
         if (!this.dirty) return null;
 
-        const temp = `${this.file}.tmp`;
-        try {
-            await fsPromises.writeFile(temp, JSON.stringify({
-                imported: this.imported,
-                exported: this.exported,
-                savedAt: new Date().toISOString()
-            }, null, 2));
-            await fsPromises.rename(temp, this.file);
-            this.dirty = false;
-            return null;
-        } catch (error) {
-            // A single failed save costs accuracy across a restart, never
-            // correctness of the running counters, and the next save retries.
-            // A persistent one rewinds them on every restart, so report it.
-            await fsPromises.rm(temp, { force: true }).catch(() => {});
-            return error.message ?? String(error);
-        }
+        const error = await writeJsonFileAtomic(this.file, {
+            imported: this.imported,
+            exported: this.exported,
+            savedAt: new Date().toISOString()
+        });
+        // A single failed save costs accuracy across a restart, never
+        // correctness of the running counters, and the next save retries.
+        // A persistent one rewinds them on every restart, so report it.
+        if (!error) this.dirty = false;
+        return error;
     }
 
     /**

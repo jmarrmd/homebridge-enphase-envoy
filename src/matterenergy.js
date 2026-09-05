@@ -48,6 +48,7 @@
  * reports why instead of throwing.
  */
 
+import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { PluginName, PlatformName, MeasurementKind } from './constants.js';
 
@@ -119,6 +120,30 @@ function resolveMatterDevice(moduleName, exportName) {
 
     return { device: null, tried };
 }
+
+/**
+ * Matter caps BridgedDeviceBasicInformation's serialNumber and nodeLabel at 32
+ * characters, and matter.js rejects the whole accessory when one overflows
+ * rather than trimming it. Homebridge passes ours through unchanged, so the
+ * bound is ours to respect.
+ */
+const MAX_IDENTITY = 32;
+
+/**
+ * A serial that already fits is kept byte-identical: changing one would alter
+ * the device's identity and cost it its history in the controller. Only a
+ * value that would overflow falls back to a hashed form, which stays
+ * deterministic and unique where a plain truncation would not — "…-production"
+ * and "…-productionCombined" trim to the same string.
+ */
+const serialFor = (value) => {
+    if (value.length <= MAX_IDENTITY) return value;
+    const digest = createHash('sha1').update(value).digest('hex').slice(0, 8);
+    return `${value.slice(0, MAX_IDENTITY - 9)}-${digest}`;
+};
+
+/** Display names are labels rather than identity, so trimming is enough. */
+const labelFor = (value) => (value.length <= MAX_IDENTITY ? value : value.slice(0, MAX_IDENTITY));
 
 /** Matter uses milli-units for electrical measurements. */
 const milli = (value) => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) : null);
@@ -353,9 +378,9 @@ class MatterEnergyBridge {
 
             accessories.push({
                 UUID: uuid,
-                displayName: sensor.displayName,
+                displayName: labelFor(sensor.displayName),
                 deviceType: this.deviceTypeFor(sensor.kind, matter),
-                serialNumber: `${info.serialNumber}-${sensor.kind}${generation}`,
+                serialNumber: serialFor(`${info.serialNumber}-${sensor.kind}${generation}`),
                 manufacturer: 'Enphase',
                 model: info.modelName,
                 firmwareRevision: info.software,

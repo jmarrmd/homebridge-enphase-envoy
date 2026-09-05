@@ -54,6 +54,7 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 - Grid export: `activePower` (positive when pushing, 0 when importing) + `cumulativeEnergyExported`
 - Grid is **two one-directional endpoints** by default (`gridSplit`). One endpoint declaring both directions is legal Matter and Homebridge writes both without error, but the iOS 27 Home app read only the exported half and silently ignored import. `gridSplit: false` restores the combined endpoint.
 - **All values are milli-units** (mV / mA / mW / mWh) — multiply by 1000
+- `serialNumber` and `displayName` must stay within Matter's 32-character bound. Homebridge passes both through unchanged and matter.js rejects the whole accessory when either overflows, so `matterenergy.js` clamps them. A serial that already fits is never rewritten — changing one costs the device its history in the controller.
 - Homebridge derives the mandatory attributes itself (`powerMode`, `numberOfMeasurementTypes`, `accuracy`, PowerTopology) and picks the feature-gated `ElectricalEnergyMeasurement` features from which energy attributes are declared at registration. Declare only the readings.
 - Declare every power attribute at registration (null where unknown), because features are detected from what is declared then, not from later updates.
 - Cumulative energy must be monotonic — `EnvoyClient` holds it at a high-water mark.

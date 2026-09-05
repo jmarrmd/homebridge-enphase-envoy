@@ -193,15 +193,16 @@ class MatterEnergyBridge {
      *        energy device types instead of a plain ElectricalSensor.
      *        See ENERGY_DEVICE_TYPES.
      */
-    constructor({ api, log, prefix = '', energyDeviceTypes = false, historyGeneration = 0 }) {
+    constructor({ api, log, prefix = '', energyDeviceTypes = false, generationFor = () => 0 }) {
         this.api = api;
         this.log = log;
         this.prefix = prefix;
         this.energyDeviceTypes = energyDeviceTypes;
 
-        // Folded into the accessory UUIDs, so bumping it presents every sensor
-        // as a new device and the controller starts a fresh history.
-        this.historyGeneration = historyGeneration;
+        // Folded into each accessory's identity, so bumping a sensor's
+        // generation presents it as a new device and the controller starts a
+        // fresh history for that sensor alone.
+        this.generationFor = generationFor;
 
         /** @type {Map<string, {uuid: string, kind: string, lastEnergy: string|null, lastEnergyAt: number}>} */
         this.sensors = new Map();
@@ -346,7 +347,8 @@ class MatterEnergyBridge {
         const accessories = [];
 
         for (const sensor of sensors) {
-            const generation = this.historyGeneration > 0 ? `:g${this.historyGeneration}` : '';
+            const number = this.generationFor(sensor.kind);
+            const generation = number > 0 ? `:g${number}` : '';
             const uuid = matter.uuid.generate(`${PluginName}:${info.serialNumber}:${sensor.kind}${generation}`);
 
             accessories.push({

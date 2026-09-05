@@ -160,7 +160,11 @@ class EnvoyEnergyDevice {
         // controller treats every sensor as new, and cumulative energy
         // published from zero rather than from the gateway's lifetime total.
         this.resetHistory = Math.max(0, Math.trunc(Number(config.resetHistory) || 0));
-        this.baseline = new EnergyBaseline({ file: baselineFile, generation: this.resetHistory });
+        this.baseline = new EnergyBaseline({
+            file: baselineFile,
+            generation: this.resetHistory,
+            perSensor: config.resetHistoryPerSensor ?? {}
+        });
 
         this.client = new EnvoyClient({
             host,
@@ -187,7 +191,7 @@ class EnvoyEnergyDevice {
             // solarPowerDeviceType is the v1.1.0 name, kept working because it
             // covered production only; the option now covers both sensors.
             energyDeviceTypes: config.energyDeviceTypes ?? config.solarPowerDeviceType ?? false,
-            historyGeneration: this.resetHistory
+            generationFor: (kind) => this.baseline.generationFor(kind)
         });
 
         this.pollTimer = null;
@@ -201,15 +205,21 @@ class EnvoyEnergyDevice {
      * change what the controller sees.
      */
     async loadBaseline() {
-        if (!this.baseline.enabled) return;
-
         const { status, error } = await this.baseline.load();
+
         if (status === 'unreadable' && this.logLevel.warn) {
-            this.log.warn(`${this.prefix}Stored energy baselines could not be read (${error}). They will be captured again from the next reading, so cumulative energy restarts at zero for this generation.`);
-        } else if (status === 'reset' && this.logLevel.info) {
-            this.log.info(`${this.prefix}resetHistory is now ${this.resetHistory}: publishing the sensors as new devices with cumulative energy starting from zero. The Home app keeps the old sensors' history under their previous identity.`);
+            this.log.warn(`${this.prefix}Stored energy baselines could not be read (${error}). They will be captured again from the next reading, so cumulative energy restarts at zero for any sensor with resetHistory set.`);
         } else if (this.logLevel.debug) {
-            this.log.info(`${this.prefix}debug: energy baselines ${status} (generation ${this.resetHistory})`);
+            this.log.info(`${this.prefix}debug: energy baselines ${status}`);
+        }
+
+        // Say which sensors are publishing under a reset identity, since it
+        // explains why their history in the Home app starts where it does.
+        if (this.baseline.enabled && this.logLevel.info) {
+            const reset = Object.values(MeasurementKind)
+                .filter((kind) => this.baseline.generationFor(kind) > 0)
+                .map((kind) => `${kind} (generation ${this.baseline.generationFor(kind)})`);
+            this.log.info(`${this.prefix}Publishing from a reset history: ${reset.join(', ')}. These appear in the Home app as new devices with cumulative energy starting at zero; the previous ones keep their history under their old identity until removed there.`);
         }
     }
 
@@ -253,8 +263,8 @@ class EnvoyEnergyDevice {
 
             await this.loadBaseline();
 
-            const reading = this.baseline.apply(await this.client.readEnergy());
-            const sensors = this.buildSensors(reading);
+            const readings = this.readingsByKind(await this.client.readEnergy());
+            const sensors = this.buildSensors(readings);
             if (sensors.length === 0) {
                 throw new Error('Gateway reported neither production nor consumption');
             }
@@ -276,45 +286,70 @@ class EnvoyEnergyDevice {
      * reports no consumption at all, so publishing that sensor would only ever
      * show zero — say so once and leave it out.
      */
-    buildSensors(reading) {
+    buildSensors(readings) {
         const sensors = [];
+        const production = readings[MeasurementKind.Production];
+        const consumption = readings[MeasurementKind.Consumption];
+        const grid = readings[MeasurementKind.GridImport] ?? readings[MeasurementKind.Grid];
 
-        if (this.productionEnabled && reading.production) {
-            sensors.push({ kind: MeasurementKind.Production, displayName: this.productionName, reading: reading.production });
+        if (this.productionEnabled && production) {
+            sensors.push({ kind: MeasurementKind.Production, displayName: this.productionName, reading: production });
         } else if (this.productionEnabled && this.logLevel.warn) {
             this.log.warn(`${this.prefix}Gateway reports no production data — production sensor not published.`);
         }
 
-        if (this.consumptionEnabled && reading.consumption) {
-            sensors.push({ kind: MeasurementKind.Consumption, displayName: this.consumptionName, reading: reading.consumption });
+        if (this.consumptionEnabled && consumption) {
+            sensors.push({ kind: MeasurementKind.Consumption, displayName: this.consumptionName, reading: consumption });
         } else if (this.consumptionEnabled && this.logLevel.info) {
             this.log.info(`${this.prefix}Gateway reports no consumption data (no consumption CTs installed) — consumption sensor not published.`);
         }
 
-        if (this.gridEnabled && reading.grid && this.gridSplit) {
-            sensors.push({ kind: MeasurementKind.GridImport, displayName: `${this.gridName} Import`, reading: reading.grid });
-            sensors.push({ kind: MeasurementKind.GridExport, displayName: `${this.gridName} Export`, reading: reading.grid });
+        if (this.gridEnabled && grid && this.gridSplit) {
+            sensors.push({ kind: MeasurementKind.GridImport, displayName: `${this.gridName} Import`, reading: readings[MeasurementKind.GridImport] });
+            sensors.push({ kind: MeasurementKind.GridExport, displayName: `${this.gridName} Export`, reading: readings[MeasurementKind.GridExport] });
 
             // The combined endpoint as a control, published next to the split
             // pair so both shapes see the same flow at the same time.
             if (this.experimentalSensors) {
-                sensors.push({ kind: MeasurementKind.Grid, displayName: `${this.gridName} Test`, reading: reading.grid });
+                sensors.push({ kind: MeasurementKind.Grid, displayName: `${this.gridName} Test`, reading: readings[MeasurementKind.Grid] });
             }
-        } else if (this.gridEnabled && reading.grid) {
-            sensors.push({ kind: MeasurementKind.Grid, displayName: this.gridName, reading: reading.grid });
+        } else if (this.gridEnabled && grid) {
+            sensors.push({ kind: MeasurementKind.Grid, displayName: this.gridName, reading: readings[MeasurementKind.Grid] });
         } else if (this.gridEnabled && this.logLevel.info) {
             this.log.info(`${this.prefix}Cannot determine grid flow — needs either a net-consumption CT or both production and consumption. Grid sensor not published.`);
         }
 
-        if (this.experimentalSensors && this.productionEnabled && reading.production) {
+        if (this.experimentalSensors && this.productionEnabled && production) {
             sensors.push({
                 kind: MeasurementKind.ProductionCombined,
                 displayName: `${this.productionName} Test`,
-                reading: this.combinedProduction(reading)
+                reading: readings[MeasurementKind.ProductionCombined]
             });
         }
 
         return sensors;
+    }
+
+    /**
+     * One reading per sensor kind, each offset by that sensor's own baseline.
+     *
+     * Grid import, grid export and the combined grid endpoint read the same two
+     * counters, so the offset has to be applied per sensor rather than once to
+     * the shared reading — otherwise resetting one would move the others.
+     */
+    readingsByKind(reading) {
+        const raw = {
+            [MeasurementKind.Production]: reading.production,
+            [MeasurementKind.Consumption]: reading.consumption,
+            [MeasurementKind.Grid]: reading.grid,
+            [MeasurementKind.GridImport]: reading.grid,
+            [MeasurementKind.GridExport]: reading.grid,
+            [MeasurementKind.ProductionCombined]: this.combinedProduction(reading)
+        };
+
+        return Object.fromEntries(
+            Object.entries(raw).map(([kind, value]) => [kind, this.baseline.apply(kind, value)])
+        );
     }
 
     /**
@@ -323,6 +358,7 @@ class EnvoyEnergyDevice {
      * the array's — see MeasurementKind.ProductionCombined.
      */
     combinedProduction(reading) {
+        if (!reading.production) return null;
         return { ...reading.production, energyImported: reading.grid?.energyImported ?? 0 };
     }
 
@@ -331,18 +367,12 @@ class EnvoyEnergyDevice {
         this.polling = true;
 
         try {
-            const reading = this.baseline.apply(await this.client.readEnergy());
+            const readings = this.readingsByKind(await this.client.readEnergy());
 
-            await Promise.all([
-                this.matter.update(MeasurementKind.Production, reading.production),
-                this.matter.update(MeasurementKind.Consumption, reading.consumption),
-                // All three take the same grid reading; update() no-ops for
-                // whichever kinds were not registered.
-                this.matter.update(MeasurementKind.Grid, reading.grid),
-                this.matter.update(MeasurementKind.GridImport, reading.grid),
-                this.matter.update(MeasurementKind.GridExport, reading.grid),
-                this.matter.update(MeasurementKind.ProductionCombined, this.combinedProduction(reading))
-            ]);
+            // update() no-ops for whichever kinds were not registered.
+            await Promise.all(
+                Object.entries(readings).map(([kind, value]) => this.matter.update(kind, value))
+            );
 
             // Cheap when nothing changed, and the counters are only as good as
             // the last write if Homebridge stops unexpectedly.
@@ -350,7 +380,8 @@ class EnvoyEnergyDevice {
             await this.saveBaseline();
 
             if (this.logLevel.debug) {
-                this.log.info(`${this.prefix}debug: production ${reading.production?.power ?? '-'} W, consumption ${reading.consumption?.power ?? '-'} W, grid ${reading.grid?.power ?? '-'} W (imported ${wh(reading.grid?.energyImported)}, exported ${wh(reading.grid?.energyExported)})`);
+                const grid = readings[MeasurementKind.GridImport];
+                this.log.info(`${this.prefix}debug: production ${readings[MeasurementKind.Production]?.power ?? '-'} W, consumption ${readings[MeasurementKind.Consumption]?.power ?? '-'} W, grid ${grid?.power ?? '-'} W (imported ${wh(grid?.energyImported)}, exported ${wh(readings[MeasurementKind.GridExport]?.energyExported)})`);
             }
         } catch (error) {
             if (this.logLevel.error) {

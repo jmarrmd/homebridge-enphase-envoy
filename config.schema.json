@@ -161,6 +161,20 @@
                             "required": false,
                             "description": "Increase this number to start the Home app's energy history over. The sensors are republished under new identities, so the Home app treats them as new devices, and cumulative energy is published from zero instead of from the gateway's lifetime total. Use it when a sensor's history is unusable \u2014 for example when a newly added sensor recorded its entire lifetime counter as a single hour, which sets the chart axis and makes every real bar beside it unreadable. Leave at 0 to keep publishing the gateway's own lifetime totals. The old sensors and their history stay in the Home app under their previous identity until you remove them there; the new ones start empty and need a day of data before they appear in Electricity Usage."
                         },
+                        "resetHistoryPerSensor": {
+                            "title": "Reset energy history \u2014 individual sensors",
+                            "type": "object",
+                            "required": false,
+                            "description": "Per-sensor overrides of the reset generation above. Set one to start just that sensor's history over while every other sensor keeps its own. An override replaces the value above for that sensor rather than adding to it.",
+                            "properties": {
+                                "production": { "title": "Solar production", "type": "integer", "minimum": 0, "required": false },
+                                "consumption": { "title": "Home consumption", "type": "integer", "minimum": 0, "required": false },
+                                "gridImport": { "title": "Grid import", "type": "integer", "minimum": 0, "required": false },
+                                "gridExport": { "title": "Grid export", "type": "integer", "minimum": 0, "required": false },
+                                "grid": { "title": "Grid (combined endpoint / test sensor)", "type": "integer", "minimum": 0, "required": false },
+                                "productionCombined": { "title": "Solar production test sensor", "type": "integer", "minimum": 0, "required": false }
+                            }
+                        },
                         "experimentalSensors": {
                             "title": "Publish experimental test sensors",
                             "type": "boolean",
@@ -261,6 +275,12 @@
                         "devices[].gridSplit",
                         "devices[].experimentalSensors",
                         "devices[].resetHistory",
+                        "devices[].resetHistoryPerSensor.production",
+                        "devices[].resetHistoryPerSensor.consumption",
+                        "devices[].resetHistoryPerSensor.gridImport",
+                        "devices[].resetHistoryPerSensor.gridExport",
+                        "devices[].resetHistoryPerSensor.grid",
+                        "devices[].resetHistoryPerSensor.productionCombined",
                         "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]

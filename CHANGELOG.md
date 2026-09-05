@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.8.2] - (05.09.2026)
+
+### Fixed
+
+- **A reset sensor could fail to register at all.** Matter caps `BridgedDeviceBasicInformation.serialNumber` at 32 characters, and matter.js rejects the whole accessory rather than trimming. `<gateway serial>-productionCombined:g1` is 34, so resetting that sensor's history took it from 31 characters to over the limit and the endpoint never came up: `Behaviors have errors … String length of 34 is not within bounds`.
+
+  Serials that already fit are kept byte-identical, since changing one would alter a device's identity and cost it its history. Only an overlong value falls back to a deterministic hashed form — a plain truncation would not do, because `…-production` and `…-productionCombined` trim to the same string.
+
+- **Display names are bounded too.** Homebridge passes `nodeLabel` through unchanged and Matter caps it at 32, so a long enough gateway name would have failed the same way — `<name> Solar Production Test` overflows once the name passes eleven characters.
+
 ## [1.8.1] - (05.09.2026)
 
 ### Fixed

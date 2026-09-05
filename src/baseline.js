@@ -70,15 +70,26 @@ class EnergyBaseline {
         this.dirty = false;
     }
 
-    /** The generation a sensor publishes under. An override wins outright. */
+    /**
+     * The generation a sensor publishes under. An override wins outright.
+     *
+     * Coerced rather than type-checked: a config UI may write an integer field
+     * as the string "1", and silently ignoring that would turn a reset the user
+     * asked for into a no-op with nothing in the log to explain it. An unset
+     * field — absent, null or empty — falls back to the global generation.
+     */
     generationFor(kind) {
-        const override = this.perSensor?.[kind];
-        return isNumber(override) ? Math.max(0, Math.trunc(override)) : this.generation;
+        const raw = this.perSensor?.[kind];
+        if (raw === undefined || raw === null || raw === '') return this.generation;
+
+        const override = Number(raw);
+        return Number.isFinite(override) ? Math.max(0, Math.trunc(override)) : this.generation;
     }
 
     /** Whether any sensor is offset at all. */
     get enabled() {
-        return this.generation > 0 || Object.values(this.perSensor ?? {}).some((value) => isNumber(value) && value > 0);
+        if (this.generation > 0) return true;
+        return Object.keys(this.perSensor ?? {}).some((kind) => this.generationFor(kind) > 0);
     }
 
     /**

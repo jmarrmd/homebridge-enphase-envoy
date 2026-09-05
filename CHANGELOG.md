@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.8.1] - (05.09.2026)
+
+### Fixed
+
+- **`resetHistoryPerSensor` was silently ignored when a value arrived as a string.** `resetHistory` coerced its value with `Number()`, but the per-sensor path required an actual number and fell back to the global generation for anything else — so a config UI writing an integer field as `"1"` turned a reset the user had asked for into a no-op, with nothing in the log to explain it. Overrides are now coerced the same way, and an unset field (absent, `null` or empty) still falls back to the global generation rather than forcing it to zero.
+
 ## [1.8.0] - (05.09.2026)
 
 ### Added

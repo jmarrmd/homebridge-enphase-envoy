@@ -15,6 +15,7 @@
 import { join } from 'path';
 import { mkdirSync } from 'fs';
 import EnvoyClient, { TokenMode } from './src/envoyclient.js';
+import EnergyBaseline from './src/baseline.js';
 import MatterEnergyBridge from './src/matterenergy.js';
 import { PluginName, PlatformName, StorageDir, MeasurementKind } from './src/constants.js';
 
@@ -98,6 +99,7 @@ class EnvoyPlatform {
             tokenMode,
             tokenFile: join(prefDir, `envoyToken_${host.replaceAll('.', '')}`),
             gridFile: join(prefDir, `gridEnergy_${host.replaceAll('.', '')}.json`),
+            baselineFile: join(prefDir, `baseline_${host.replaceAll('.', '')}.json`),
             log: this.log,
             api: this.api
         });
@@ -120,7 +122,7 @@ class EnvoyPlatform {
  * One Envoy gateway: connect, publish its sensors to Matter, then poll.
  */
 class EnvoyEnergyDevice {
-    constructor({ config, host, name, tokenMode, tokenFile, gridFile, log, api }) {
+    constructor({ config, host, name, tokenMode, tokenFile, gridFile, baselineFile, log, api }) {
         this.config = config;
         this.host = host;
         this.name = name;
@@ -154,6 +156,12 @@ class EnvoyEnergyDevice {
         // solar one reports an import figure that is not true of the array.
         this.experimentalSensors = config.experimentalSensors ?? false;
 
+        // Bumping this starts a fresh history: new accessory UUIDs, so the
+        // controller treats every sensor as new, and cumulative energy
+        // published from zero rather than from the gateway's lifetime total.
+        this.resetHistory = Math.max(0, Math.trunc(Number(config.resetHistory) || 0));
+        this.baseline = new EnergyBaseline({ file: baselineFile, generation: this.resetHistory });
+
         this.client = new EnvoyClient({
             host,
             tokenMode,
@@ -178,13 +186,45 @@ class EnvoyEnergyDevice {
             prefix: this.prefix,
             // solarPowerDeviceType is the v1.1.0 name, kept working because it
             // covered production only; the option now covers both sensors.
-            energyDeviceTypes: config.energyDeviceTypes ?? config.solarPowerDeviceType ?? false
+            energyDeviceTypes: config.energyDeviceTypes ?? config.solarPowerDeviceType ?? false,
+            historyGeneration: this.resetHistory
         });
 
         this.pollTimer = null;
         this.retryTimer = null;
         this.polling = false;
         this.stopped = false;
+    }
+
+    /**
+     * Restore the energy baselines, reporting anything that would silently
+     * change what the controller sees.
+     */
+    async loadBaseline() {
+        if (!this.baseline.enabled) return;
+
+        const { status, error } = await this.baseline.load();
+        if (status === 'unreadable' && this.logLevel.warn) {
+            this.log.warn(`${this.prefix}Stored energy baselines could not be read (${error}). They will be captured again from the next reading, so cumulative energy restarts at zero for this generation.`);
+        } else if (status === 'reset' && this.logLevel.info) {
+            this.log.info(`${this.prefix}resetHistory is now ${this.resetHistory}: publishing the sensors as new devices with cumulative energy starting from zero. The Home app keeps the old sensors' history under their previous identity.`);
+        } else if (this.logLevel.debug) {
+            this.log.info(`${this.prefix}debug: energy baselines ${status} (generation ${this.resetHistory})`);
+        }
+    }
+
+    /** Persist newly captured baselines. Warn once if that keeps failing. */
+    async saveBaseline() {
+        const error = await this.baseline.save();
+        if (!error) return;
+
+        const message = `Could not save energy baselines: ${error}`;
+        if (this.warnedBaselineSave) {
+            if (this.logLevel.debug) this.log.info(`${this.prefix}debug: ${message}`);
+        } else {
+            this.warnedBaselineSave = true;
+            if (this.logLevel.warn) this.log.warn(`${this.prefix}${message}`);
+        }
     }
 
     /** Routes the Matter bridge's logging through this device's log levels. */
@@ -211,7 +251,9 @@ class EnvoyEnergyDevice {
                 this.log.info(`${this.prefix}Connected. Model: ${info.modelName}, firmware: ${info.software ?? 'unknown'}, meters: ${info.meters ? 'yes' : 'no'}`);
             }
 
-            const reading = await this.client.readEnergy();
+            await this.loadBaseline();
+
+            const reading = this.baseline.apply(await this.client.readEnergy());
             const sensors = this.buildSensors(reading);
             if (sensors.length === 0) {
                 throw new Error('Gateway reported neither production nor consumption');
@@ -289,7 +331,7 @@ class EnvoyEnergyDevice {
         this.polling = true;
 
         try {
-            const reading = await this.client.readEnergy();
+            const reading = this.baseline.apply(await this.client.readEnergy());
 
             await Promise.all([
                 this.matter.update(MeasurementKind.Production, reading.production),
@@ -305,6 +347,7 @@ class EnvoyEnergyDevice {
             // Cheap when nothing changed, and the counters are only as good as
             // the last write if Homebridge stops unexpectedly.
             await this.client.saveGridEnergy();
+            await this.saveBaseline();
 
             if (this.logLevel.debug) {
                 this.log.info(`${this.prefix}debug: production ${reading.production?.power ?? '-'} W, consumption ${reading.consumption?.power ?? '-'} W, grid ${reading.grid?.power ?? '-'} W (imported ${wh(reading.grid?.energyImported)}, exported ${wh(reading.grid?.energyExported)})`);

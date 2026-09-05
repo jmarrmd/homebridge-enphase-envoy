@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.7.0] - (05.09.2026)
+
+### Added
+
+- **`resetHistory`** (integer, default `0`): increase it to start the Home app's energy history over. Two things happen together, because either alone is useless:
+  - The sensors are republished under new identities (the generation is folded into each accessory's UUID and serial number), so the controller treats them as new devices rather than continuing an existing history.
+  - Cumulative energy is published **from zero** rather than from the gateway's lifetime total, using a baseline captured at first sight and persisted per generation.
+
+  The second is what makes the first worth doing. A controller derives each bar by differencing the cumulative counter and has no prior reading for a device it has never seen; the Home app appears to difference that first reading against zero, so a new sensor whose counter already stands at 41 MWh records the whole 41 MWh as one hour's energy. That bar is meaningless, and because it sets the axis it makes every real bar beside it unreadable for as long as it stays in the history. Observed directly: the experimental grid sensor's first bucket was 85.6 kWh, exactly its own cumulative export counter at the moment it was published.
+
+  Nothing is lost by publishing from zero. The absolute total is never displayed — only differences between successive readings, which are identical either way — and Matter asks that cumulative energy be monotonic, not that it count from the beginning of time.
+
+  Leaving `resetHistory` at 0 changes nothing: the gateway's own lifetime totals are published exactly as before. Re-capturing baselines on an existing generation would rewind counters the controller has already seen, which is the one thing that corrupts its history, so baselines are tied to the generation and discarded only when it changes.
+
+  The old sensors and their history stay in the Home app under their previous identity until removed there.
+
+### Changed
+
+- Atomic-write and read-back logic moved to `src/jsonstore.js` and is now shared by the grid counters and the new baselines, rather than duplicated.
+
 ## [1.6.0] - (04.09.2026)
 
 ### Added

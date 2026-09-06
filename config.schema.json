@@ -144,11 +144,11 @@
                             }
                         },
                         "gridSplit": {
-                            "title": "Publish grid as two sensors",
+                            "title": "Split grid into separate import and export sensors",
                             "type": "boolean",
-                            "default": true,
+                            "default": false,
                             "required": false,
-                            "description": "Publish grid import and grid export as two separate one-directional sensors instead of one sensor carrying both. A single endpoint declaring both directions is legal Matter and Homebridge writes both without error, but on an iOS 27 beta (August 2026) the Home app showed only the exported half and silently ignored import. Two one-directional endpoints match the shape of the production and consumption sensors, which Home handles correctly. Turning this off restores the single combined sensor.",
+                            "description": "By default the grid is one sensor carrying both directions \u2014 the shape the Matter specification describes for a grid connection, and one tile in the Home app. Turn this on to publish it instead as two one-directional sensors, \"<Grid name> Import\" and \"<Grid name> Export\", each shaped like the production and consumption sensors. Worth trying if a controller mishandles the combined sensor: an iOS 27 beta in August 2026 read only its exported half and silently ignored import, and by September it was reading both but appeared to show their difference rather than gross import. Switching changes the sensors' identities, so each shape keeps its own history in the Home app.",
                             "condition": {
                                 "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
                             }
@@ -171,16 +171,8 @@
                                 "consumption": { "title": "Home consumption", "type": "integer", "minimum": 0, "required": false },
                                 "gridImport": { "title": "Grid import", "type": "integer", "minimum": 0, "required": false },
                                 "gridExport": { "title": "Grid export", "type": "integer", "minimum": 0, "required": false },
-                                "grid": { "title": "Grid (combined endpoint / test sensor)", "type": "integer", "minimum": 0, "required": false },
-                                "productionCombined": { "title": "Solar production test sensor", "type": "integer", "minimum": 0, "required": false }
+                                "grid": { "title": "Grid (combined sensor)", "type": "integer", "minimum": 0, "required": false }
                             }
-                        },
-                        "experimentalSensors": {
-                            "title": "Publish experimental test sensors",
-                            "type": "boolean",
-                            "default": false,
-                            "required": false,
-                            "description": "Publishes two extra sensors alongside the real ones, purely to observe how the Home app treats an endpoint that declares both energy directions: \"<Grid name> Test\" (one endpoint carrying both grid directions) and \"<Solar name> Test\" (a SolarPower endpoint carrying production as export and the house's grid draw as import). Leave this off unless you are running that comparison. The extra sensors report energy the real ones already report, and the solar one's import figure is the home's, not the array's \u2014 it is deliberately not true of the device it sits on."
                         },
                         "energyDeviceTypes": {
                             "title": "Use Matter energy device types",
@@ -273,14 +265,12 @@
                         "devices[].gridEnabled",
                         "devices[].gridName",
                         "devices[].gridSplit",
-                        "devices[].experimentalSensors",
                         "devices[].resetHistory",
                         "devices[].resetHistoryPerSensor.production",
                         "devices[].resetHistoryPerSensor.consumption",
                         "devices[].resetHistoryPerSensor.gridImport",
                         "devices[].resetHistoryPerSensor.gridExport",
                         "devices[].resetHistoryPerSensor.grid",
-                        "devices[].resetHistoryPerSensor.productionCombined",
                         "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]

@@ -71,8 +71,7 @@ const ENERGY_DEVICE_TYPES = {
     [MeasurementKind.Consumption]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
     [MeasurementKind.Grid]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
     [MeasurementKind.GridImport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
-    [MeasurementKind.GridExport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
-    [MeasurementKind.ProductionCombined]: { module: 'solar-power', exportName: 'SolarPowerDevice' }
+    [MeasurementKind.GridExport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
 };
 
 /**
@@ -133,8 +132,8 @@ const MAX_IDENTITY = 32;
  * A serial that already fits is kept byte-identical: changing one would alter
  * the device's identity and cost it its history in the controller. Only a
  * value that would overflow falls back to a hashed form, which stays
- * deterministic and unique where a plain truncation would not — "…-production"
- * and "…-productionCombined" trim to the same string.
+ * deterministic and unique where a plain truncation would not — "…-gridImport"
+ * and "…-gridExport" can trim to the same string.
  */
 const serialFor = (value) => {
     if (value.length <= MAX_IDENTITY) return value;
@@ -288,11 +287,14 @@ class MatterEnergyBridge {
      * feature-gated ElectricalEnergyMeasurement features from exactly this, at
      * registration, so whatever a sensor declares here is all it can ever report.
      *
-     * The combined grid endpoint declares both directions. That is legal, and
-     * Homebridge writes both without error, but on an iOS 27 beta the Home app
-     * showed only the exported half — measured against 68 kWh of import sitting
-     * correct on disk. Splitting the two into their own endpoints, each with a
-     * single direction, is what `gridSplit` does and why it is the default.
+     * The combined grid endpoint declares both directions, which is the shape
+     * the Matter spec describes for a grid connection. What a controller then
+     * makes of it has moved: an iOS 27 beta in August 2026 read only the
+     * exported half and silently ignored 68 kWh of import, which is why
+     * `gridSplit` exists; by September it was reading both, though it appears
+     * to show their difference rather than gross import. `gridSplit` publishes
+     * the same flow as two one-directional endpoints instead, leaving the
+     * controller nothing to infer.
      */
     energyFor(kind, reading) {
         const at = nowEpochS();
@@ -308,15 +310,6 @@ class MatterEnergyBridge {
         }
         if (kind === MeasurementKind.GridExport) {
             return { cumulativeEnergyExported: cumulative(reading?.energyExported, at) };
-        }
-
-        // Experiment only. Production as export, the house's grid draw as
-        // import, on one SolarPower endpoint — see MeasurementKind.
-        if (kind === MeasurementKind.ProductionCombined) {
-            return {
-                cumulativeEnergyExported: cumulative(reading?.energyLifetime, at),
-                cumulativeEnergyImported: cumulative(reading?.energyImported, at)
-            };
         }
 
         // The array delivers energy; the house draws it.

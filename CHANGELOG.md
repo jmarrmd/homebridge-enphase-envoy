@@ -12,6 +12,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.9.0] - (06.09.2026)
+
+### Changed
+
+- **The grid is one sensor again by default.** `gridSplit` now defaults to `false`, publishing a single `Grid` endpoint that declares both cumulative directions — the shape the Matter specification describes for a grid connection, and one tile in the Home app rather than two.
+
+  The split into two one-directional endpoints was the default from v1.4.0 because the August 2026 iOS 27 build read only the exported half of the combined endpoint and silently ignored 68 kWh of import. On the September build the same combined endpoint is recording import, so the failure that motivated the split is gone. What it displays looks closer to *net* import than to gross; that is the controller differencing two counters it can now see, not a fault in them.
+
+  `gridSplit: true` restores the pair. Switching either way changes the sensors' identities, so each shape keeps its own history in the Home app; the counters underneath are shared and keep accumulating regardless.
+
+### Added
+
+- **A daily grid summary in the log.** Once a local day the plugin closes the counters out and reports what crossed the meter, so its integration can be checked against the Enphase app or a utility bill without catching the counter file at midnight:
+
+  ```
+  Grid on 2026-09-05: imported 29.6 kWh, exported 4.3 kWh, net 25.3 kWh.
+  ```
+
+  Import and export are gross — energy that flowed each way, accumulated separately — which is the same definition the Enphase app uses for its daily Imported and Exported. `net` is their difference, the app's "Net Imported" row.
+
+  A day that cannot be compared fairly says so: `partial day` for the first day after a fresh install, and `n min not measured` for time the plugin was not sampling, since the integrator skips a long gap rather than integrating across it and that day genuinely under-reports. The open day is persisted to `<storage>/enphaseEnvoyMatter/gridDaily_<host>.json`, so a restart at 4 p.m. does not report eight hours as a day. Logged at info level.
+
+### Removed
+
+- **The experimental test sensors and the `experimentalSensors` option.** They existed to compare endpoint shapes side by side, and the comparison is done. The solar one — a `SolarPower` endpoint carrying production as export and the house's grid draw as import — was the weaker of the two ideas from the start: the import figure was deliberately not true of the array it sat on, §14.3 of the Matter 1.6 Device Library defines `SolarPower` through endpoint composition with a `PowerSource` child rather than as a flat two-directional endpoint, and its graphs in the Home app never resolved into anything readable. The grid one is no longer experimental — it is the default shape, reachable through `gridSplit`.
+
+  `resetHistoryPerSensor.productionCombined` goes with it. Any value left in the config is ignored; nothing else needs changing.
+
 ## [1.8.2] - (05.09.2026)
 
 ### Fixed

@@ -70,20 +70,14 @@ export const MeasurementKind = {
     Production: 'production',
     Consumption: 'consumption',
 
-    // One endpoint carrying both grid directions. Apple's iOS 27 Energy view
-    // reads only the export half of such an endpoint, so this is no longer the
-    // default — see GridImport / GridExport and `gridSplit` in the README.
+    // One endpoint carrying both grid directions, and the default shape: it is
+    // what the Matter spec describes for a grid connection, and it is one tile
+    // in the Home app rather than two.
     Grid: 'grid',
 
     // The same grid flow as two one-directional endpoints, each shaped like
     // production and consumption: a fixed direction and a positive power.
+    // Opt-in via `gridSplit` — see README, "The grid sensor".
     GridImport: 'gridImport',
-    GridExport: 'gridExport',
-
-    // Opt-in experiment (`experimentalSensors`): a SolarPower endpoint that
-    // also declares grid import, published alongside the real production
-    // sensor. Its import figure is deliberately not true of the array — it is
-    // the house's grid draw — so it exists only to observe how the Home app
-    // treats a two-directional SolarPower endpoint. Never published by default.
-    ProductionCombined: 'productionCombined'
+    GridExport: 'gridExport'
 };

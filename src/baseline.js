@@ -29,7 +29,8 @@
  *
  * Baselines are therefore keyed by sensor *and* field, not by field alone:
  * grid import, grid export and the combined grid endpoint all read the same two
- * counters, so resetting one of them must not disturb the others.
+ * counters, and `gridSplit` can switch between them, so resetting one must not
+ * disturb the others.
  *
  * Re-capturing a baseline at an unchanged generation would rewind a counter the
  * controller has already seen, which is the one thing that corrupts its
@@ -49,9 +50,9 @@ const ENERGY_FIELDS = ['energyLifetime', 'energyImported', 'energyExported'];
  * consumed them, so upgrading does not rewind a counter mid-generation.
  */
 const LEGACY_KEYS = {
-    production: ['production:energyLifetime', 'productionCombined:energyLifetime'],
+    production: ['production:energyLifetime'],
     consumption: ['consumption:energyLifetime'],
-    gridImported: ['grid:energyImported', 'gridImport:energyImported', 'productionCombined:energyImported'],
+    gridImported: ['grid:energyImported', 'gridImport:energyImported'],
     gridExported: ['grid:energyExported', 'gridExport:energyExported']
 };
 

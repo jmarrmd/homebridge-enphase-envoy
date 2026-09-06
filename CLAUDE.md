@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `homebridge-enphase-envoy-matter` — a Homebridge plugin that publishes solar production and home consumption from an Enphase Envoy / IQ Gateway as **Matter electrical sensors**, so they appear in the Apple Home Energy view on iOS 27 and later. Supports gateway firmware v5–v8.
 
-The plugin is deliberately narrow: four sensors per gateway (production, consumption, grid import, grid export), nothing else. `experimentalSensors` adds two opt-in controls for observing Home app behaviour — off by default, and not part of the intended surface. It registers **no HomeKit/HAP accessories** — HAP has no power or energy characteristic, so it cannot drive the Energy view.
+The plugin is deliberately narrow: three sensors per gateway (production, consumption, grid), nothing else. `gridSplit` swaps the single grid sensor for a one-directional import/export pair, which is the only shape choice on offer. It registers **no HomeKit/HAP accessories** — HAP has no power or energy characteristic, so it cannot drive the Energy view.
 
 It is a reduced derivative of `homebridge-enphase-envoy` v10.7.7 (whose history is still in [CHANGELOG.md](CHANGELOG.md)) and is **designed to run alongside it, not replace it**. The plugin name, platform alias (`enphaseEnvoyMatter`), child bridge and token cache directory are all deliberately distinct — see `PluginName` / `PlatformName` / `StorageDir` in [src/constants.js](src/constants.js). Do not "align" these back to the original's values; the divergence is load-bearing.
 
@@ -36,6 +36,7 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 | [index.js](index.js) | Platform + per-device orchestration: config validation, connect/retry, poll loop, cached-accessory cleanup |
 | [src/envoyclient.js](src/envoyclient.js) | Auth (JWT for v7+, Digest for v5/v6) and the two data endpoints; normalizes readings |
 | [src/gridenergy.js](src/gridenergy.js) | Integrates signed grid power into the two monotonic counters Matter needs; persists them |
+| [src/dailyenergy.js](src/dailyenergy.js) | Closes the grid counters out once a local day and reports the deltas, so the integration can be checked against an outside figure |
 | [src/baseline.js](src/baseline.js) | Publishes cumulative energy from when a sensor went live rather than from the gateway's lifetime total (`resetHistory`) |
 | [src/jsonstore.js](src/jsonstore.js) | Atomic JSON read/write shared by the grid counters and the baselines |
 | [src/matterenergy.js](src/matterenergy.js) | Matter cluster mapping and registration; all `api.matter` use lives here |
@@ -52,7 +53,7 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 - Consumption: `activePower` + `cumulativeEnergyImported`
 - Grid import: `activePower` (positive when drawing, 0 when exporting) + `cumulativeEnergyImported`
 - Grid export: `activePower` (positive when pushing, 0 when importing) + `cumulativeEnergyExported`
-- Grid is **two one-directional endpoints** by default (`gridSplit`). One endpoint declaring both directions is legal Matter and Homebridge writes both without error, but the iOS 27 Home app read only the exported half and silently ignored import. `gridSplit: false` restores the combined endpoint.
+- Grid is **one endpoint declaring both directions** by default — the shape the Matter spec describes for a grid connection. `gridSplit: true` publishes it as two one-directional endpoints instead. That split was the default from v1.4.0 to v1.8.2, because the August 2026 iOS 27 build read only the exported half of the combined endpoint and silently ignored import; by September it read both, though it appears to display their difference rather than gross import. Do not treat either shape as obsolete — both are live options and both have been observed to matter.
 - **All values are milli-units** (mV / mA / mW / mWh) — multiply by 1000
 - `serialNumber` and `displayName` must stay within Matter's 32-character bound. Homebridge passes both through unchanged and matter.js rejects the whole accessory when either overflows, so `matterenergy.js` clamps them. A serial that already fits is never rewritten — changing one costs the device its history in the controller.
 - Homebridge derives the mandatory attributes itself (`powerMode`, `numberOfMeasurementTypes`, `accuracy`, PowerTopology) and picks the feature-gated `ElectricalEnergyMeasurement` features from which energy attributes are declared at registration. Declare only the readings.
@@ -62,6 +63,7 @@ To test locally in Homebridge, install with `npm install -g .`, enable Matter on
 - Cumulative energy carries `endTimestamp` (Unix seconds — matter.js converts to the Matter epoch itself). Per the spec, `startTimestamp` and `startSystime` **shall be omitted** for cumulative energy, and `endSystime` may be omitted once UTC is known. Do not add them.
 - An unchanged total is republished every five minutes (`ENERGY_HEARTBEAT_INTERVAL`). A controller derives each hourly bar by differencing the counter, so it cannot close a bucket without a reading at or after the bucket's end — without the heartbeat, a counter that stops moving (solar overnight) leaves those buckets stuck "in progress".
 - Change detection compares the energy totals alone; `endTimestamp` moves every poll and would otherwise make every reading look new.
+- Grid counters are **gross-directional**: `accumulate()` splits each interval by sign, so `imported` and `exported` mean the same thing the Enphase app's daily Imported and Exported mean. Neither is net. A controller showing something near their difference is netting them itself — check against the daily summary line before changing anything here.
 - `resetHistory` (default 0), and `resetHistoryPerSensor` for individual sensors, fold a generation into each accessory's UUID and serial number and publish cumulative energy from a baseline captured at first sight. Bumping one starts that sensor's history over; leaving it alone publishes the gateway's lifetime totals unchanged. Baselines are keyed by **sensor and field**, because grid import, grid export and the combined endpoint share the same counters and must reset independently — `readingsByKind()` applies them per sensor. Never re-capture a baseline at an unchanged generation; that rewinds a counter the controller has already seen.
 
 ## Module System

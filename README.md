@@ -16,8 +16,9 @@ It exposes three things per gateway:
 |--------|--------------------|---------|
 | Solar Production | ElectricalSensor (0x0510), or SolarPower (0x17) — see below | live watts, lifetime energy **exported** |
 | Home Consumption | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts, lifetime energy **imported** |
-| Grid Import | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts drawn from the utility, lifetime energy imported |
-| Grid Export | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts sent to the utility, lifetime energy exported |
+| Grid | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live signed watts, lifetime energy imported **and** exported |
+
+Set [`gridSplit`](#one-sensor-or-two-gridsplit) to publish the grid as two one-directional sensors instead — "Grid Import" and "Grid Export", each shaped like production and consumption.
 
 Import and export are relative to the endpoint: the PV array *delivers* energy, the house *draws* it. That distinction is what lets a controller tell a producer from a load.
 
@@ -102,7 +103,7 @@ Configure through the Homebridge UI, or add a platform block by hand:
 | `consumptionName` | `<name> Home Consumption` | Name of the consumption sensor. |
 | `gridEnabled` | `true` | Publish the grid sensor — what crosses the service entrance. |
 | `gridName` | `<name> Grid` | Base name for the grid sensors. |
-| `gridSplit` | `true` | Publish grid import and export as two one-directional sensors. `false` restores the single combined endpoint — see [The grid sensor](#the-grid-sensor). |
+| `gridSplit` | `false` | Publish grid import and export as two one-directional sensors instead of one carrying both — see [One sensor or two](#one-sensor-or-two-gridsplit). |
 | `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Confirmed working — see below. |
 | `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
 | `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
@@ -128,7 +129,7 @@ Setting `"energyDeviceTypes": true` publishes each sensor with the application-c
 |---|---|---|
 | Production | `SolarPower` (0x17) | The spec's PV array type. Declares no clusters of its own — it is a semantic tag. |
 | Consumption | `ElectricalMeter` (0x0514) | "Meters the electrical energy being imported and/or exported." Its mandatory clusters are exactly the two this plugin declares. |
-| Grid Import / Export | `ElectricalMeter` (0x0514) | The same type, which describes a grid connection more exactly than it does house load. Each endpoint declares a single direction; see [The grid sensor](#the-grid-sensor) for why they are split. |
+| Grid | `ElectricalMeter` (0x0514) | The same type, which describes a grid connection more exactly than it does house load. One endpoint declaring both directions, or two declaring one each — see [One sensor or two](#one-sensor-or-two-gridsplit). |
 
 Not `ElectricalUtilityMeter` (0x0511): despite the name it models the utility *account* — its mandatory cluster is `MeterIdentification`, not measurement — so it describes the revenue meter at the service entrance, not house load.
 
@@ -147,24 +148,35 @@ The earlier `solarPowerDeviceType` option still works and means the same thing.
 
 Neither production nor house load tells a controller what crossed your service entrance, because solar consumed on site never touches the grid. Publishing only those two is why the Home app shows a house-load *total* with no grid figure: it is handed "imported 61 kWh" for the whole house and takes that at face value, even though much of it came from the roof.
 
-The grid sensor closes that gap. It reports both cumulative directions, published by default as **two one-directional endpoints**:
+The grid sensor closes that gap. By default it is **one endpoint carrying both directions**, which is the shape the Matter specification describes for a grid connection:
 
 ```
-<name> Grid Import   cumulativeEnergyImported  ← drawn from the utility
-<name> Grid Export   cumulativeEnergyExported  ← sent to the utility
+<name> Grid   cumulativeEnergyImported  ← drawn from the utility
+              cumulativeEnergyExported  ← sent to the utility
+              activePower               ← signed: positive drawing, negative pushing
 ```
 
-Each endpoint carries a positive `activePower` for its own direction and zero when flow is the other way, exactly like the production and consumption sensors.
+### One sensor or two (`gridSplit`)
 
-### Why two endpoints and not one
+Setting `gridSplit: true` publishes the same flow as two one-directional sensors instead:
 
-Until v1.4.0 this was a single `ElectricalMeter` endpoint declaring both directions. That is legal Matter, Homebridge writes both attributes without error, and no failure appears in the log — but on an iOS 27 beta (August 2026) the Home app **read only the exported half and silently ignored import**. Measured on a live gateway: 68 kWh of import accumulated correctly on disk and climbing at ~885 W, against essentially nothing in Electricity Usage, while export tracked fine.
+```
+<name> Grid Import   cumulativeEnergyImported, activePower positive drawing, 0 when exporting
+<name> Grid Export   cumulativeEnergyExported, activePower positive pushing, 0 when importing
+```
 
-The symptom is easy to misread, because it looks like a broken counter and it appears *gradually* — export recovers from any counter reset quickly since its total is small, so a chart can show export-only for days while import stays blank.
+Each of those is shaped exactly like the production and consumption sensors — a fixed direction, and a power that is never negative — so there is nothing left for a controller to infer. The cost is a second tile in the Home app, and a direction the controller cannot recombine.
 
-Two one-directional endpoints match the shape of the production and consumption sensors, which Home has always handled correctly, and leave nothing for the controller to infer. The cost is an extra tile in the Home app. Set `gridSplit: false` to go back to the single combined endpoint.
+Which one to use depends on what your controller does with the combined endpoint, and Apple's answer has moved:
 
-Related: a Homebridge plugin cannot set `Descriptor.TagList`, so the standard semantic tags (Commodity Tariff Flow `0x13`, Power Source `0x0F`) that would state a direction explicitly are unreachable. The endpoint split is the workaround available from here.
+- **August 2026, iOS 27 beta.** The combined endpoint was written without error and no failure appeared in the log, but the Home app **read only the exported half and silently ignored import**. Measured on a live gateway: 68 kWh of import accumulated correctly on disk and climbing at ~885 W, against essentially nothing in Electricity Usage, while export tracked fine. The split was introduced in v1.4.0 for this, and became the default.
+- **September 2026.** The same combined endpoint was recording import. What it shows looks closer to *net* import — imported minus exported — than to the gross import figure the counter holds. That is the controller netting two counters it can see, not a fault in them: the counters are gross-directional, and the daily summary in the log ([below](#checking-the-numbers)) prints import, export and net side by side so you can tell which one a tile is tracking.
+
+Since the combined endpoint is the more conformant shape and the failure that motivated the split is gone, it is the default again from v1.9.0. Turn `gridSplit` on if your controller mishandles it, or if you want gross import on a tile of its own.
+
+Switching between the two changes the sensors' identities, so each shape keeps its own history in the Home app rather than one continuing the other. The counters underneath are shared and keep accumulating either way.
+
+Related: a Homebridge plugin cannot set `Descriptor.TagList` on a flat endpoint, so the standard semantic tags (Commodity Tariff Flow `0x13`, Power Source `0x0F`) that would state a direction explicitly are unreachable. Splitting the endpoint is the only way to state a direction from here — the endpoint's identity carries what a tag would have said.
 
 **Power** comes from the `net-consumption` CT when the gateway has one, since that is a direct measurement of the service entrance. Otherwise it is derived as `house load − production`, which is the same quantity by conservation of energy.
 
@@ -175,6 +187,26 @@ Related: a Homebridge plugin cannot set `Descriptor.TagList`, so the standard se
 - Counters are persisted to `<storage>/enphaseEnvoyMatter/gridEnergy_<host>.json` and restored on start, because Matter treats cumulative energy as monotonic and a restart that reset them to zero would corrupt the Home app's history.
 
 The honest caveat: this is a Riemann sum at your polling rate, so swings between samples are invisible to it. Expect it to track well for slow-moving loads and to under-resolve spiky ones. It is an approximation where the production and consumption counters are the gateway's own measurements. A shorter `refreshInterval` improves it at the cost of polling the gateway harder.
+
+### Checking the numbers
+
+Once a local day the plugin closes the counters out and logs what crossed the meter, so its integration can be checked against the Enphase app or a utility bill without catching the counter file at midnight:
+
+```
+Device: envoy.local Envoy, Grid on 2026-09-05: imported 29.6 kWh, exported 4.3 kWh, net 25.3 kWh.
+```
+
+Import and export are **gross** — energy that flowed each way, accumulated separately — which is the same definition the Enphase app uses for its daily Imported and Exported figures. Its "Net Imported" row is just the difference, and `net` here is the same subtraction.
+
+A day that cannot be compared fairly says so:
+
+```
+Grid on 2026-09-05: imported 18.2 kWh, exported 4.3 kWh, net 13.9 kWh (partial day, counting began mid-day; 47 min not measured).
+```
+
+`partial day` is the first day after a fresh install. `n min not measured` is time the plugin was not sampling — the integrator skips a long gap rather than integrating across it, so that day genuinely under-reports by whatever crossed the meter while Homebridge was down. The open day is persisted to `<storage>/enphaseEnvoyMatter/gridDaily_<host>.json`, so a restart at 4 p.m. does not report eight hours as a day.
+
+The line is logged at info level, once a day. It needs `gridEnabled`, and nothing else.
 
 **Integrating is not a workaround for a missing endpoint — it is the only thing that can work.** Checked against a real gateway (IQ Gateway, firmware D8.3.5289):
 

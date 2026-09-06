@@ -16,6 +16,7 @@ import { join } from 'path';
 import { mkdirSync } from 'fs';
 import EnvoyClient, { TokenMode } from './src/envoyclient.js';
 import EnergyBaseline from './src/baseline.js';
+import DailyEnergy from './src/dailyenergy.js';
 import MatterEnergyBridge from './src/matterenergy.js';
 import { PluginName, PlatformName, StorageDir, MeasurementKind } from './src/constants.js';
 
@@ -25,6 +26,9 @@ const CONNECT_RETRY_MS = 120_000;
 
 /** Watt-hours for the debug log: enough precision to see a counter advance. */
 const wh = (value) => (typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} Wh` : '-');
+
+/** Kilowatt-hours, to compare a day against a figure from the Enphase app. */
+const kwh = (value) => (typeof value === 'number' && Number.isFinite(value) ? `${(value / 1000).toFixed(1)} kWh` : '-');
 
 class EnvoyPlatform {
     constructor(log, config, api) {
@@ -100,6 +104,7 @@ class EnvoyPlatform {
             tokenFile: join(prefDir, `envoyToken_${host.replaceAll('.', '')}`),
             gridFile: join(prefDir, `gridEnergy_${host.replaceAll('.', '')}.json`),
             baselineFile: join(prefDir, `baseline_${host.replaceAll('.', '')}.json`),
+            dailyFile: join(prefDir, `gridDaily_${host.replaceAll('.', '')}.json`),
             log: this.log,
             api: this.api
         });
@@ -122,7 +127,7 @@ class EnvoyPlatform {
  * One Envoy gateway: connect, publish its sensors to Matter, then poll.
  */
 class EnvoyEnergyDevice {
-    constructor({ config, host, name, tokenMode, tokenFile, gridFile, baselineFile, log, api }) {
+    constructor({ config, host, name, tokenMode, tokenFile, gridFile, baselineFile, dailyFile, log, api }) {
         this.config = config;
         this.host = host;
         this.name = name;
@@ -146,15 +151,12 @@ class EnvoyEnergyDevice {
         this.consumptionName = config.consumptionName || `${name} Home Consumption`;
         this.gridName = config.gridName || `${name} Grid`;
 
-        // Apple's iOS 27 Energy view reads only the export half of an endpoint
-        // that declares both grid directions, so publish them separately.
-        this.gridSplit = config.gridSplit ?? true;
-
-        // Side-by-side controls for observing how the Home app treats an
-        // endpoint that declares both energy directions. Off by default: the
-        // extra sensors duplicate energy the real ones already report, and the
-        // solar one reports an import figure that is not true of the array.
-        this.experimentalSensors = config.experimentalSensors ?? false;
+        // One endpoint carrying both directions is the default: it is the shape
+        // the Matter spec describes for a grid connection, and it is one tile in
+        // the Home app rather than two. Splitting it into two one-directional
+        // endpoints is the fallback for a controller that mishandles the pair —
+        // see README, "The grid sensor".
+        this.gridSplit = config.gridSplit ?? false;
 
         // Bumping this starts a fresh history: new accessory UUIDs, so the
         // controller treats every sensor as new, and cumulative energy
@@ -166,6 +168,16 @@ class EnvoyEnergyDevice {
             perSensor: config.resetHistoryPerSensor ?? {}
         });
 
+        // Integrating across a long outage would invent energy that was never
+        // measured, so anything beyond a few missed polls is treated as a gap —
+        // skipped by the integrator, and reported as unmeasured by the day's
+        // summary. Both need the same threshold to agree with each other.
+        this.gridMaxGapMs = Math.max(this.refreshMs * 5, 120_000);
+
+        // Closes the grid counters out once a local day, so the plugin's own
+        // integration can be checked against the Enphase app or a utility bill.
+        this.daily = new DailyEnergy({ file: dailyFile, gapMs: this.gridMaxGapMs });
+
         this.client = new EnvoyClient({
             host,
             tokenMode,
@@ -175,9 +187,7 @@ class EnvoyEnergyDevice {
             envoyToken: config.envoyToken,
             envoyPasswd: config.envoyPasswd,
             gridFile: this.gridEnabled ? gridFile : null,
-            // Integrating across a long outage would invent energy that was never
-            // measured, so anything beyond a few missed polls is treated as a gap.
-            gridMaxGapMs: Math.max(this.refreshMs * 5, 120_000)
+            gridMaxGapMs: this.gridMaxGapMs
         })
             .on('success', (message) => this.logLevel.success && this.log.success(`${this.prefix}${message}`))
             .on('warn', (message) => this.logLevel.warn && this.log.warn(`${this.prefix}${message}`))
@@ -237,6 +247,61 @@ class EnvoyEnergyDevice {
         }
     }
 
+    /**
+     * Restore the open day. A lost mark costs one day's accuracy — the next
+     * summary is reported as partial — so this is quieter than the baselines,
+     * which can change what a controller sees.
+     */
+    async loadDaily() {
+        if (!this.gridEnabled) return;
+
+        const { status, error } = await this.daily.load();
+        if (this.logLevel.debug) {
+            this.log.info(`${this.prefix}debug: daily grid summary ${status}${error ? ` (${error})` : ''}`);
+        }
+    }
+
+    /**
+     * Log what crossed the meter over the local day that just ended.
+     *
+     * The counters are gross-directional — energy in and energy out,
+     * accumulated separately — which is the same definition the Enphase app
+     * uses for its daily Imported and Exported. Net is reported too, because
+     * that is the row the app shows most prominently and a controller may
+     * display something closer to it.
+     *
+     * The window's caveats are printed rather than assumed away: a day that did
+     * not start at midnight, or one with time the integrator refused to
+     * integrate across, under-reports and should not be compared as if it were
+     * whole.
+     */
+    reportDailyGrid(grid) {
+        const closed = this.daily.sample({ imported: grid?.energyImported, exported: grid?.energyExported });
+        if (!closed || !this.logLevel.info) return;
+
+        const caveats = [];
+        if (!closed.whole) caveats.push('partial day, counting began mid-day');
+        if (closed.gapMs > 0) caveats.push(`${Math.round(closed.gapMs / 60_000)} min not measured`);
+
+        const net = closed.imported - closed.exported;
+        const suffix = caveats.length > 0 ? ` (${caveats.join('; ')})` : '';
+        this.log.info(`${this.prefix}Grid on ${closed.day}: imported ${kwh(closed.imported)}, exported ${kwh(closed.exported)}, net ${kwh(net)}${suffix}.`);
+    }
+
+    /** Persist the open day. Warn once if that keeps failing. */
+    async saveDaily() {
+        const error = await this.daily.save();
+        if (!error) return;
+
+        const message = `Could not save the daily grid summary: ${error}`;
+        if (this.warnedDailySave) {
+            if (this.logLevel.debug) this.log.info(`${this.prefix}debug: ${message}`);
+        } else {
+            this.warnedDailySave = true;
+            if (this.logLevel.warn) this.log.warn(`${this.prefix}${message}`);
+        }
+    }
+
     /** Routes the Matter bridge's logging through this device's log levels. */
     scopedLogger() {
         return {
@@ -262,6 +327,7 @@ class EnvoyEnergyDevice {
             }
 
             await this.loadBaseline();
+            await this.loadDaily();
 
             const readings = this.readingsByKind(await this.client.readEnergy());
             const sensors = this.buildSensors(readings);
@@ -307,24 +373,10 @@ class EnvoyEnergyDevice {
         if (this.gridEnabled && grid && this.gridSplit) {
             sensors.push({ kind: MeasurementKind.GridImport, displayName: `${this.gridName} Import`, reading: readings[MeasurementKind.GridImport] });
             sensors.push({ kind: MeasurementKind.GridExport, displayName: `${this.gridName} Export`, reading: readings[MeasurementKind.GridExport] });
-
-            // The combined endpoint as a control, published next to the split
-            // pair so both shapes see the same flow at the same time.
-            if (this.experimentalSensors) {
-                sensors.push({ kind: MeasurementKind.Grid, displayName: `${this.gridName} Test`, reading: readings[MeasurementKind.Grid] });
-            }
         } else if (this.gridEnabled && grid) {
             sensors.push({ kind: MeasurementKind.Grid, displayName: this.gridName, reading: readings[MeasurementKind.Grid] });
         } else if (this.gridEnabled && this.logLevel.info) {
             this.log.info(`${this.prefix}Cannot determine grid flow — needs either a net-consumption CT or both production and consumption. Grid sensor not published.`);
-        }
-
-        if (this.experimentalSensors && this.productionEnabled && production) {
-            sensors.push({
-                kind: MeasurementKind.ProductionCombined,
-                displayName: `${this.productionName} Test`,
-                reading: readings[MeasurementKind.ProductionCombined]
-            });
         }
 
         return sensors;
@@ -343,8 +395,7 @@ class EnvoyEnergyDevice {
             [MeasurementKind.Consumption]: reading.consumption,
             [MeasurementKind.Grid]: reading.grid,
             [MeasurementKind.GridImport]: reading.grid,
-            [MeasurementKind.GridExport]: reading.grid,
-            [MeasurementKind.ProductionCombined]: this.combinedProduction(reading)
+            [MeasurementKind.GridExport]: reading.grid
         };
 
         return Object.fromEntries(
@@ -352,22 +403,13 @@ class EnvoyEnergyDevice {
         );
     }
 
-    /**
-     * Production plus the house's grid import on one reading, for the
-     * experimental SolarPower endpoint. The import figure is the home's, not
-     * the array's — see MeasurementKind.ProductionCombined.
-     */
-    combinedProduction(reading) {
-        if (!reading.production) return null;
-        return { ...reading.production, energyImported: reading.grid?.energyImported ?? 0 };
-    }
-
     async poll() {
         if (this.polling || this.stopped) return;
         this.polling = true;
 
         try {
-            const readings = this.readingsByKind(await this.client.readEnergy());
+            const reading = await this.client.readEnergy();
+            const readings = this.readingsByKind(reading);
 
             // update() no-ops for whichever kinds were not registered.
             await Promise.all(
@@ -378,6 +420,12 @@ class EnvoyEnergyDevice {
             // the last write if Homebridge stops unexpectedly.
             await this.client.saveGridEnergy();
             await this.saveBaseline();
+
+            // Fed the gateway-side counters rather than the published ones: a
+            // baseline capture offsets those by a constant, which would land in
+            // the day it happened as a spurious delta.
+            this.reportDailyGrid(reading.grid);
+            await this.saveDaily();
 
             if (this.logLevel.debug) {
                 const grid = readings[MeasurementKind.GridImport];

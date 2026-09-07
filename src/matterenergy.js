@@ -200,6 +200,46 @@ const ENERGY_UPDATE_INTERVAL = 60_000;
 const ENERGY_HEARTBEAT_INTERVAL = 300_000;
 
 /**
+ * How much opening cumulative energy is worth saying out loud, in mWh.
+ *
+ * A controller derives each hourly bar by differencing the cumulative counter,
+ * and it has no prior reading for a device it has never seen — the Home app
+ * differences that first reading against zero, so whatever a sensor opens with
+ * is charted as a single hour's energy. A sensor opening at 50 kWh is a 50 kWh
+ * bar in tomorrow's chart, and nothing later in the log explains it. Say the
+ * number at registration, where it can still be acted on.
+ */
+const OPENING_ENERGY_NOTICE = 1_000_000;
+
+/**
+ * Implied average power past which a step in a cumulative counter is not load,
+ * in watts.
+ *
+ * A cumulative counter climbs with real flow, so a step in it is either a
+ * genuine surge or a bookkeeping accident — a baseline that moved, a counter
+ * file that was lost, a controller resuming after a gap it could not see. Only
+ * the last of those ever surfaces, days later, as one absurd bar in a chart.
+ * Power is the part that is physically bounded — a residential service is a
+ * couple of hundred amps — so an implied power beyond this is the accident.
+ */
+const IMPLAUSIBLE_POWER = 50_000;
+
+/** Kilowatt-hours from milliwatt-hours, for the log. */
+const kwh = (milliWattHours) => `${(milliWattHours / 1_000_000).toFixed(1)} kWh`;
+
+/** Watts, in the unit that keeps the number readable. */
+const watts = (value) => (Math.abs(value) >= 10_000
+    ? `${Math.round(value / 1000).toLocaleString('en-US')} kW`
+    : `${Math.round(value)} W`);
+
+/** The usable numbers out of an ElectricalEnergyMeasurement state. */
+const energyValuesOf = (energy) => Object.fromEntries(
+    Object.entries(energy ?? {})
+        .map(([field, measurement]) => [field, measurement?.energy])
+        .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+);
+
+/**
  * Key for change detection: the energy totals alone. endTimestamp moves every
  * poll, so comparing the whole struct would make every reading look new.
  */
@@ -369,7 +409,7 @@ class MatterEnergyBridge {
             const generation = number > 0 ? `:g${number}` : '';
             const uuid = matter.uuid.generate(`${PluginName}:${info.serialNumber}:${sensor.kind}${generation}`);
 
-            accessories.push({
+            const accessory = {
                 UUID: uuid,
                 displayName: labelFor(sensor.displayName),
                 deviceType: this.deviceTypeFor(sensor.kind, matter),
@@ -379,9 +419,21 @@ class MatterEnergyBridge {
                 firmwareRevision: info.software,
                 context: { serialNumber: info.serialNumber, kind: sensor.kind },
                 clusters: this.buildClusters(sensor.kind, sensor.reading)
-            });
+            };
+            accessories.push(accessory);
 
-            this.sensors.set(sensor.kind, { uuid, kind: sensor.kind, lastEnergy: null, lastEnergyAt: 0 });
+            this.sensors.set(sensor.kind, {
+                uuid,
+                kind: sensor.kind,
+                displayName: sensor.displayName,
+                lastEnergy: null,
+                lastEnergyAt: 0,
+                // Seeded from what the accessory is registered with, so the
+                // first published update is measured against the opening value
+                // rather than passing unchecked.
+                energyValues: energyValuesOf(accessory.clusters.electricalEnergyMeasurement),
+                energyValuesAt: Date.now()
+            });
         }
 
         if (accessories.length === 0) {
@@ -393,11 +445,72 @@ class MatterEnergyBridge {
             await matter.registerPlatformAccessories(PluginName, PlatformName, accessories);
             const names = accessories.map((accessory) => accessory.displayName).join(', ');
             this.log.info(`${this.prefix}Published to Matter as electrical sensors: ${names}. They appear in the Apple Home Energy view on iOS 27 and later.`);
+            accessories.forEach((accessory) => this.reportOpeningEnergy(accessory));
             return true;
         } catch (error) {
             this.log.error(`${this.prefix}Failed to register Matter accessories: ${error.message ?? error}`);
             this.sensors.clear();
             return false;
+        }
+    }
+
+    /**
+     * Say what a sensor opened at, because that value is the first bar.
+     *
+     * Reported for every sensor at debug, and at info once it is large enough
+     * to distort a chart — at which point it is also worth saying what to do
+     * about it, since by the time the bar appears the reason is a day old and
+     * two config changes back.
+     */
+    reportOpeningEnergy(accessory) {
+        const values = Object.entries(energyValuesOf(accessory.clusters?.electricalEnergyMeasurement));
+        if (values.length === 0) return;
+
+        const summary = values.map(([field, value]) => `${field} ${kwh(value)}`).join(', ');
+        const notable = values.some(([, value]) => value >= OPENING_ENERGY_NOTICE);
+        if (!notable) {
+            this.log.debug(`${this.prefix}${accessory.displayName} opens at ${summary}.`);
+            return;
+        }
+
+        this.log.info(`${this.prefix}${accessory.displayName} opens at ${summary}. A controller that has not seen this device before has nothing to difference against, so the Home app records the opening value as a single hour of energy — one tall bar, which then sets the chart's axis. It is a one-off, and the bars after it are real. To open at zero instead, bump this sensor's resetHistory, which republishes it under a new identity.`);
+    }
+
+    /**
+     * Watch a published counter for steps that are not load.
+     *
+     * The counters this plugin publishes are monotonic totals, and every bar a
+     * controller draws is a difference between two of them. That makes a step
+     * indistinguishable from an hour of enormous consumption once it reaches a
+     * chart — so it is caught here, at the moment it is published, where the
+     * size and the interval are both still known.
+     */
+    reportEnergyStep(sensor, energy, now) {
+        const values = energyValuesOf(energy);
+        const previous = sensor.energyValues;
+        const elapsed = now - sensor.energyValuesAt;
+        sensor.energyValues = values;
+        sensor.energyValuesAt = now;
+        if (!previous || elapsed <= 0) return;
+
+        for (const [field, value] of Object.entries(values)) {
+            const before = previous[field];
+            if (typeof before !== 'number') continue;
+
+            const delta = value - before;
+            if (delta === 0) continue;
+
+            // mWh over ms, as watts.
+            const implied = delta * 3600 / elapsed;
+            const step = `${sensor.displayName} ${field} ${kwh(value)}, ${delta > 0 ? '+' : ''}${kwh(delta)} in ${Math.round(elapsed / 1000)} s (${watts(implied)} implied)`;
+
+            if (delta < 0) {
+                this.log.warn(`${this.prefix}${step}. Cumulative energy went backwards, which Matter does not allow — a controller may discard readings until it climbs past what it saw before. The counter file or a baseline has probably been lost or rewritten.`);
+            } else if (implied > IMPLAUSIBLE_POWER) {
+                this.log.warn(`${this.prefix}${step}. That is not load. A controller charts a step like this as one hour's energy, so expect a tall bar. Usual causes: the counter file or a baseline changed underneath, or this sensor's history was reset.`);
+            } else {
+                this.log.debug(`${this.prefix}${step}.`);
+            }
         }
     }
 
@@ -425,6 +538,7 @@ class MatterEnergyBridge {
         if ((changed && due) || heartbeat) {
             sensor.lastEnergy = energy;
             sensor.lastEnergyAt = now;
+            this.reportEnergyStep(sensor, clusters.electricalEnergyMeasurement, now);
             updates.push(matter.updateAccessoryState(sensor.uuid, 'electricalEnergyMeasurement', clusters.electricalEnergyMeasurement));
         }
 

@@ -12,6 +12,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.10.0] - (07.09.2026)
+
+### Added
+
+- **Counter steps are reported where they happen.** A controller draws each hourly bar by differencing the cumulative counter, so anything that moves a counter other than real flow arrives as one enormous hour — and by the time that bar appears, the cause is a day old and two config changes back.
+
+  Each sensor now says what it opens at, because that value is the controller's first bar:
+
+  ```
+  Envoy Grid opens at cumulativeEnergyImported 49.9 kWh, cumulativeEnergyExported 10.3 kWh. A controller that has not seen this device before has nothing to difference against …
+  ```
+
+  And a step in a published total is reported as the power it implies:
+
+  ```
+  Envoy Grid cumulativeEnergyImported 232.5 kWh, +232.4 kWh in 60 s (13,942 kW implied). That is not load. …
+  ```
+
+  Past 50 kW implied it warns, as does a counter going backwards — which Matter forbids, and which makes a controller discard readings until the total climbs past what it last saw. Ordinary movement is logged at debug in the same shape, so `log.debug` yields a per-minute series of exactly what was published.
+
+  Measured against a live system: a `grid` generation moved 1 → 0 → 1 published the raw 232 kWh counters in place of the baselined 49.9 kWh ones, and the Home app charted ~50 kWh bars. Neither line existed to explain it.
+
+### Fixed
+
+- **The per-poll debug line reported sensors that were never published.** It named `gridImport` and `gridExport` unconditionally, so with the combined grid sensor it described endpoints that do not exist — and with a per-sensor reset on `grid`, it printed numbers from a different baseline than the published sensor's. It now follows what was actually registered, and reports each sensor's own counters.
+
+### Documentation
+
+- **Holding a generation constant is how a sensor keeps a device the controller already has.** `resetHistory` was documented only as a way to discard history; the inverse is what matters when a sensor's shape changes, and setting a generation to `0` is not "no reset" — it removes the baseline, so the sensor publishes raw counters. Both are now in the README under "Resetting, and un-resetting".
+
 ## [1.9.0] - (06.09.2026)
 
 ### Changed

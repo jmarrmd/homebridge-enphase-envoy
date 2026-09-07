@@ -208,6 +208,39 @@ Grid on 2026-09-05: imported 18.2 kWh, exported 4.3 kWh, net 13.9 kWh (partial d
 
 The line is logged at info level, once a day. It needs `gridEnabled`, and nothing else.
 
+### When a chart shows an impossible bar
+
+A controller draws each hourly bar by differencing the cumulative counter, so anything that moves a counter other than real flow arrives as one enormous hour. A 50 kWh bar is 50 kW for an hour — not load, and by the time it appears the cause is a day old. Two lines catch it at the source.
+
+**At registration**, each sensor says what it opens at:
+
+```
+Envoy Grid opens at cumulativeEnergyImported 49.9 kWh, cumulativeEnergyExported 10.3 kWh. A controller that has not seen this device before has nothing to difference against, so the Home app records the opening value as a single hour of energy …
+```
+
+That opening value *is* tomorrow's first bar. It is a one-off and the bars after it are real, but if you would rather not have it, bump that sensor's `resetHistory` so it opens at zero. Below 1 kWh the line drops to debug, since opening near zero is the intended state after a reset.
+
+**While running**, a step in a published counter is reported as the power it implies:
+
+```
+Envoy Grid cumulativeEnergyImported 232.5 kWh, +232.4 kWh in 60 s (13,942 kW implied). That is not load. …
+```
+
+Anything past 50 kW implied — more than a residential service can pass — warns, as does a counter going backwards, which Matter forbids and which makes a controller discard readings until the total climbs past what it last saw. Ordinary movement is logged at debug with the same shape, so `log.debug` gives a per-minute series of exactly what was published.
+
+The usual causes of a step are a counter file or baseline that changed underneath the sensor, or a history reset. **Changing a sensor's generation is itself a step** — see below.
+
+### Resetting, and un-resetting
+
+`resetHistory` and `resetHistoryPerSensor` fold a generation into a sensor's identity, so bumping one presents a new device to the controller and starts its history over. The part that is easy to miss is the inverse: **holding a generation constant is how a sensor keeps a device it already has.**
+
+Change a sensor's shape — `gridSplit`, or which endpoint carries the grid — and it is the generation, not the display name, that decides whether the controller sees the same device or a new one. Two consequences worth knowing before you touch either setting:
+
+- Setting a generation *back* to a value used before re-adopts that device, history intact, along with the baseline captured for it.
+- Setting a generation to `0` removes the baseline entirely, so the sensor publishes the gateway's raw counters rather than the offset ones. On a counter standing at 232 kWh that is a 232 kWh step, and the chart above is what it looks like.
+
+So a generation is not a "clear history" button to try things with. Pick one and leave it; every change costs the sensor its history and buys a spurious bar.
+
 **Integrating is not a workaround for a missing endpoint — it is the only thing that can work.** Checked against a real gateway (IQ Gateway, firmware D8.3.5289):
 
 - `/ivp/meters/readings` exposes only a production meter and a load-side consumption meter. Neither `actEnergyRcvd` is a grid-export counter: the production meter's is 0.0001% of delivered (inverter standby), and the consumption meter's is a rounding error against a lifetime that would be orders of magnitude larger if it tracked export.

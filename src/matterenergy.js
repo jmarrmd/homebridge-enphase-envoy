@@ -176,11 +176,17 @@ const cumulative = (wattHours, at) => ({ energy: milli(wattHours) ?? 0, endTimes
  * (Matter 1.6 Cluster § 2.12.5.2.2-3) — the period is the whole meaning of the
  * value, so a reading without it says nothing. The systime pair may be omitted
  * once UTC is known, so it is.
+ *
+ * EndTimestamp carries `min startTimestamp + 1` in the spec's own data model,
+ * so a period must span at least a second and a zero-length one is rejected —
+ * matter.js validates it and fails the whole accessory, not just the reading.
+ * The floor is applied here rather than at each call site because every path
+ * that builds one of these owes the same invariant.
  */
 const periodic = (wattHours, from, to) => ({
     energy: milli(wattHours) ?? 0,
     startTimestamp: from,
-    endTimestamp: to
+    endTimestamp: Math.max(to, from + 1)
 });
 
 /**
@@ -383,7 +389,10 @@ class MatterEnergyBridge {
         // whether the Home app populates it is then an unambiguous answer.
         if (kind === MeasurementKind.GridPeriodic) {
             const anchor = sensor?.periodicAnchor;
-            const from = anchor?.at ?? at;
+            // Registration has no previous period to follow, so it opens with
+            // the second just gone: the shortest window the spec allows, over
+            // which nothing is claimed to have flowed.
+            const from = anchor?.at ?? at - 1;
             return {
                 periodicEnergyImported: periodic(since(reading?.energyImported, anchor?.imported), from, at),
                 periodicEnergyExported: periodic(since(reading?.energyExported, anchor?.exported), from, at)
@@ -612,11 +621,18 @@ class MatterEnergyBridge {
             // The period just reported ends here, so the next one starts here.
             // Advanced only on a publish: moving it every poll would report a
             // 30-second slice as if it were the whole minute.
+            //
+            // Taken from the timestamp actually published rather than a fresh
+            // clock reading, so successive periods abut exactly — including
+            // where the one-second floor moved the end forward. Reading the
+            // clock again would leave a gap or an overlap whenever a second
+            // ticked between building the reading and recording it.
             if (sensor.periodicAnchor) {
+                const published = clusters.electricalEnergyMeasurement.periodicEnergyImported;
                 sensor.periodicAnchor = {
                     imported: reading.energyImported ?? sensor.periodicAnchor.imported,
                     exported: reading.energyExported ?? sensor.periodicAnchor.exported,
-                    at: nowEpochS()
+                    at: published?.endTimestamp ?? nowEpochS()
                 };
             }
             updates.push(matter.updateAccessoryState(sensor.uuid, 'electricalEnergyMeasurement', clusters.electricalEnergyMeasurement));

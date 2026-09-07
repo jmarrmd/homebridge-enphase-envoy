@@ -27,6 +27,9 @@ const CONNECT_RETRY_MS = 120_000;
 /** Watt-hours for the debug log: enough precision to see a counter advance. */
 const wh = (value) => (typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} Wh` : '-');
 
+/** Energy fields a reading may carry, for the debug line. */
+const ENERGY_FIELDS = ['energyLifetime', 'energyImported', 'energyExported'];
+
 /** Kilowatt-hours, to compare a day against a figure from the Enphase app. */
 const kwh = (value) => (typeof value === 'number' && Number.isFinite(value) ? `${(value / 1000).toFixed(1)} kWh` : '-');
 
@@ -338,6 +341,13 @@ class EnvoyEnergyDevice {
             const published = await this.matter.register({ info, sensors });
             if (!published) return;
 
+            // The debug line reports exactly what went out, so it has to follow
+            // what was registered rather than a fixed list of kinds: with a
+            // per-sensor reset in play, two sensors reading the same counters
+            // publish different numbers, and a line naming the wrong one sends
+            // you looking for a fault in the wrong place.
+            this.publishedKinds = sensors.map((sensor) => sensor.kind);
+
             this.pollTimer = setInterval(() => this.poll(), this.refreshMs);
         } catch (error) {
             if (this.logLevel.error) {
@@ -403,6 +413,25 @@ class EnvoyEnergyDevice {
         );
     }
 
+    /**
+     * One line describing each published sensor as it stands this poll: live
+     * power, and whichever cumulative counters that sensor actually carries,
+     * after its own baseline has been applied.
+     */
+    describeReadings(readings) {
+        const kinds = this.publishedKinds ?? Object.keys(readings);
+        return kinds
+            .map((kind) => {
+                const reading = readings[kind];
+                const energy = ENERGY_FIELDS
+                    .filter((field) => typeof reading?.[field] === 'number')
+                    .map((field) => `${field.replace('energy', '').toLowerCase()} ${wh(reading[field])}`);
+                const detail = energy.length > 0 ? ` (${energy.join(', ')})` : '';
+                return `${kind} ${reading?.power ?? '-'} W${detail}`;
+            })
+            .join(' | ');
+    }
+
     async poll() {
         if (this.polling || this.stopped) return;
         this.polling = true;
@@ -428,8 +457,7 @@ class EnvoyEnergyDevice {
             await this.saveDaily();
 
             if (this.logLevel.debug) {
-                const grid = readings[MeasurementKind.GridImport];
-                this.log.info(`${this.prefix}debug: production ${readings[MeasurementKind.Production]?.power ?? '-'} W, consumption ${readings[MeasurementKind.Consumption]?.power ?? '-'} W, grid ${grid?.power ?? '-'} W (imported ${wh(grid?.energyImported)}, exported ${wh(readings[MeasurementKind.GridExport]?.energyExported)})`);
+                this.log.info(`${this.prefix}debug: ${this.describeReadings(readings)}`);
             }
         } catch (error) {
             if (this.logLevel.error) {

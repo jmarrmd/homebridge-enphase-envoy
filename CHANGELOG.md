@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.11.1] - (07.09.2026)
+
+### Fixed
+
+- **The periodic test sensor failed to register.** Its opening reading declared a zero-length period — `startTimestamp` equal to `endTimestamp` — and `EndTimestamp` carries `min startTimestamp + 1` in the spec's own data model. matter.js validates that and fails the **whole accessory**, not just the reading:
+
+  ```
+  Constraint "min startTimestamp + 1": Value 1788781144 is not within bounds
+  Failed to register Matter accessory Envoy Grid Periodic: Behaviors have errors
+  ```
+
+  A period now spans at least a second, applied inside the helper that builds every one of these rather than at each call site, and registration opens with the second just gone — the shortest window the spec allows, over which nothing is claimed to have flowed.
+
+  The test suite had asserted the zero-length period was correct, so it agreed with the bug rather than catching it. It now reads the constraint from `@matter/model` instead of restating it, and checks every reading the plugin can emit against it — including two reports inside one second, which the once-a-minute gate should prevent but which must not be able to fail an accessory if it ever happened.
+
+### Changed
+
+- **Periods abut by construction.** The next period's start is taken from the timestamp actually published rather than a fresh clock reading, so successive periods meet exactly — including where the one-second floor moved an end forward. Reading the clock a second time left a gap or an overlap whenever a second ticked between building a reading and recording it.
+
 ## [1.11.0] - (07.09.2026)
 
 ### Added

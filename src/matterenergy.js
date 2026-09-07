@@ -71,7 +71,8 @@ const ENERGY_DEVICE_TYPES = {
     [MeasurementKind.Consumption]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
     [MeasurementKind.Grid]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
     [MeasurementKind.GridImport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
-    [MeasurementKind.GridExport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
+    [MeasurementKind.GridExport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
+    [MeasurementKind.GridPeriodic]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
 };
 
 /**
@@ -166,6 +167,23 @@ const nowEpochS = () => Math.floor(Date.now() / 1000);
 const cumulative = (wattHours, at) => ({ energy: milli(wattHours) ?? 0, endTimestamp: at });
 
 /**
+ * One periodic energy reading: how much crossed the meter over a stated period,
+ * rather than a running total.
+ *
+ * Both timestamps are carried, which is the inverse of the cumulative rule.
+ * Per the cluster spec, `startTimestamp` **shall be omitted** for cumulative
+ * energy but **shall be indicated** for periodic once the server knows UTC
+ * (Matter 1.6 Cluster § 2.12.5.2.2-3) — the period is the whole meaning of the
+ * value, so a reading without it says nothing. The systime pair may be omitted
+ * once UTC is known, so it is.
+ */
+const periodic = (wattHours, from, to) => ({
+    energy: milli(wattHours) ?? 0,
+    startTimestamp: from,
+    endTimestamp: to
+});
+
+/**
  * Active power for one sensor.
  *
  * Grid power is signed: positive drawing from the utility, negative pushing
@@ -223,6 +241,17 @@ const OPENING_ENERGY_NOTICE = 1_000_000;
  * couple of hundred amps — so an implied power beyond this is the accident.
  */
 const IMPLAUSIBLE_POWER = 50_000;
+
+/**
+ * Energy accumulated since an anchor. The counters underneath are monotonic, so
+ * a negative difference means the anchor is stale rather than that energy flowed
+ * backwards — report nothing rather than a negative period.
+ */
+const since = (total, anchor) => {
+    if (typeof total !== 'number' || !Number.isFinite(total)) return 0;
+    if (typeof anchor !== 'number' || !Number.isFinite(anchor)) return 0;
+    return Math.max(0, total - anchor);
+};
 
 /** Kilowatt-hours from milliwatt-hours, for the log. */
 const kwh = (milliWattHours) => `${(milliWattHours / 1_000_000).toFixed(1)} kWh`;
@@ -310,15 +339,18 @@ class MatterEnergyBridge {
      *
      * @param {string} kind one of MeasurementKind
      * @param {object|null} reading normalized reading from EnvoyClient
+     * @param {object} [sensor] the registered sensor, when there is one. Only
+     *        the periodic endpoint needs it: its value is a difference against
+     *        what that sensor last published, which nothing else is.
      */
-    buildClusters(kind, reading) {
+    buildClusters(kind, reading, sensor) {
         return {
             electricalPowerMeasurement: {
                 voltage: milli(reading?.voltage),
                 activeCurrent: milli(reading?.current),
                 activePower: milli(powerFor(kind, reading))
             },
-            electricalEnergyMeasurement: this.energyFor(kind, reading)
+            electricalEnergyMeasurement: this.energyFor(kind, reading, sensor)
         };
     }
 
@@ -336,8 +368,27 @@ class MatterEnergyBridge {
      * the same flow as two one-directional endpoints instead, leaving the
      * controller nothing to infer.
      */
-    energyFor(kind, reading) {
+    energyFor(kind, reading, sensor) {
         const at = nowEpochS();
+
+        // Periodic energy: what crossed the meter since this sensor's last
+        // report, so a controller has nothing to difference and nothing to
+        // carry forward. The anchor advances only when a reading is actually
+        // published — see update() — because a period has to end where the
+        // next one begins, and energy goes out far less often than we poll.
+        //
+        // Declared alone, with no cumulative counter beside it: Homebridge
+        // picks the cluster's features from what is declared at registration,
+        // so this endpoint gets PeriodicEnergy and not CumulativeEnergy, and
+        // whether the Home app populates it is then an unambiguous answer.
+        if (kind === MeasurementKind.GridPeriodic) {
+            const anchor = sensor?.periodicAnchor;
+            const from = anchor?.at ?? at;
+            return {
+                periodicEnergyImported: periodic(since(reading?.energyImported, anchor?.imported), from, at),
+                periodicEnergyExported: periodic(since(reading?.energyExported, anchor?.exported), from, at)
+            };
+        }
 
         if (kind === MeasurementKind.Grid) {
             return {
@@ -432,7 +483,16 @@ class MatterEnergyBridge {
                 // first published update is measured against the opening value
                 // rather than passing unchecked.
                 energyValues: energyValuesOf(accessory.clusters.electricalEnergyMeasurement),
-                energyValuesAt: Date.now()
+                energyValuesAt: Date.now(),
+                // Where this sensor's first period begins. Registration reports
+                // a zero-length period of zero energy, which is what declares
+                // the attributes without inventing a reading for time before
+                // the sensor existed.
+                periodicAnchor: {
+                    imported: sensor.reading?.energyImported ?? 0,
+                    exported: sensor.reading?.energyExported ?? 0,
+                    at: nowEpochS()
+                }
             });
         }
 
@@ -463,7 +523,11 @@ class MatterEnergyBridge {
      * two config changes back.
      */
     reportOpeningEnergy(accessory) {
-        const values = Object.entries(energyValuesOf(accessory.clusters?.electricalEnergyMeasurement));
+        // Only cumulative opens at anything: a periodic sensor's first report
+        // covers a zero-length period, so there is no opening bar to warn about
+        // — which is the property the experiment is testing for.
+        const values = Object.entries(energyValuesOf(accessory.clusters?.electricalEnergyMeasurement))
+            .filter(([field]) => field.startsWith('cumulative'));
         if (values.length === 0) return;
 
         const summary = values.map(([field, value]) => `${field} ${kwh(value)}`).join(', ');
@@ -494,6 +558,12 @@ class MatterEnergyBridge {
         if (!previous || elapsed <= 0) return;
 
         for (const [field, value] of Object.entries(values)) {
+            // Cumulative counters only. A periodic reading is already a
+            // difference, so it is not monotonic and falling is what it does
+            // whenever less energy flowed than last period — differencing it
+            // again would warn on ordinary behaviour.
+            if (!field.startsWith('cumulative')) continue;
+
             const before = previous[field];
             if (typeof before !== 'number') continue;
 
@@ -526,7 +596,7 @@ class MatterEnergyBridge {
         if (!sensor || !reading) return;
 
         const matter = this.api.matter;
-        const clusters = this.buildClusters(sensor.kind, reading);
+        const clusters = this.buildClusters(sensor.kind, reading, sensor);
         const updates = [matter.updateAccessoryState(sensor.uuid, 'electricalPowerMeasurement', clusters.electricalPowerMeasurement)];
 
         const energy = energyKey(clusters.electricalEnergyMeasurement);
@@ -539,6 +609,16 @@ class MatterEnergyBridge {
             sensor.lastEnergy = energy;
             sensor.lastEnergyAt = now;
             this.reportEnergyStep(sensor, clusters.electricalEnergyMeasurement, now);
+            // The period just reported ends here, so the next one starts here.
+            // Advanced only on a publish: moving it every poll would report a
+            // 30-second slice as if it were the whole minute.
+            if (sensor.periodicAnchor) {
+                sensor.periodicAnchor = {
+                    imported: reading.energyImported ?? sensor.periodicAnchor.imported,
+                    exported: reading.energyExported ?? sensor.periodicAnchor.exported,
+                    at: nowEpochS()
+                };
+            }
             updates.push(matter.updateAccessoryState(sensor.uuid, 'electricalEnergyMeasurement', clusters.electricalEnergyMeasurement));
         }
 

@@ -104,6 +104,7 @@ Configure through the Homebridge UI, or add a platform block by hand:
 | `gridEnabled` | `true` | Publish the grid sensor — what crosses the service entrance. |
 | `gridName` | `<name> Grid` | Base name for the grid sensors. |
 | `gridSplit` | `false` | Publish grid import and export as two one-directional sensors instead of one carrying both — see [One sensor or two](#one-sensor-or-two-gridsplit). |
+| `periodicEnergyTest` | `false` | Publish an extra grid sensor reporting periodic energy instead of a running total — see [Periodic energy](#periodic-energy-periodicenergytest). |
 | `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Confirmed working — see below. |
 | `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
 | `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
@@ -207,6 +208,26 @@ Grid on 2026-09-05: imported 18.2 kWh, exported 4.3 kWh, net 13.9 kWh (partial d
 `partial day` is the first day after a fresh install. `n min not measured` is time the plugin was not sampling — the integrator skips a long gap rather than integrating across it, so that day genuinely under-reports by whatever crossed the meter while Homebridge was down. The open day is persisted to `<storage>/enphaseEnvoyMatter/gridDaily_<host>.json`, so a restart at 4 p.m. does not report eight hours as a day.
 
 The line is logged at info level, once a day. It needs `gridEnabled`, and nothing else.
+
+### Periodic energy (`periodicEnergyTest`)
+
+Every awkward property of the energy this plugin publishes comes from one place: cumulative energy is a running total, and a controller has to *difference* it to get an hour. That is why a brand-new sensor records its whole opening counter as a single hour, why the total may never go backwards, why `resetHistory` exists at all, and why a gap or a changed baseline arrives as one impossible bar.
+
+Matter has a second shape. `ElectricalEnergyMeasurement` is gated on two axes — Imported/Exported × **Cumulative/Periodic** — and periodic energy reports how much crossed the meter *since the last report*. The difference is already taken, so none of the above applies: nothing to difference, no monotonicity to preserve, no opening value, and an outage costs one period rather than dumping everything into the next bucket.
+
+Homebridge supports it (`detectElectricalMeasurementClusters` picks `PeriodicEnergy` from the declared attributes, and `StateManager` routes both directions through matter.js `setMeasurement`). Whether the **Home app reads it** is the open question — the Energy view is undocumented, and we already know it treats a two-directional endpoint oddly.
+
+Setting `"periodicEnergyTest": true` publishes an extra sensor to answer that:
+
+```
+<name> Grid Periodic   periodicEnergyImported, periodicEnergyExported
+```
+
+It declares periodic and **nothing else** — no cumulative counter beside it — so the result is unambiguous: if the tile populates, Home reads periodic energy; if it stays blank, it does not. The real grid sensor is untouched and keeps reporting cumulative throughout, so nothing is at risk either way.
+
+Each reading carries `startTimestamp` and `endTimestamp`, which is the inverse of the cumulative rule: the cluster spec says `startTimestamp` **shall be omitted** for cumulative energy but **shall be indicated** for periodic once the server knows UTC (Matter 1.6 Cluster § 2.12.5.2.2–3) — the period is the whole meaning of the value. Periods abut exactly, each beginning where the last ended, and the boundary advances only when a reading is actually published, so a period covers every poll since the previous report rather than the last slice of it.
+
+Leave it off unless you are running the comparison — it reports energy the grid sensor already reports.
 
 ### When a chart shows an impossible bar
 

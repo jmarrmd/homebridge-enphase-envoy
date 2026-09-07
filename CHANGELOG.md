@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.11.0] - (07.09.2026)
+
+### Added
+
+- **`periodicEnergyTest`, an opt-in sensor for the one question cumulative energy cannot answer.** Every awkward property of the energy this plugin publishes traces to a single cause: cumulative energy is a running total, and a controller has to difference it. That is why a new sensor records its opening counter as one hour, why the total may never go backwards, why `resetHistory` exists, and why a gap or a changed baseline arrives as one impossible bar.
+
+  Matter's `ElectricalEnergyMeasurement` is gated on two axes — Imported/Exported × Cumulative/**Periodic** — and periodic energy reports what crossed the meter *since the last report*. The difference is already taken, so none of the above applies. Homebridge supports it; whether the Home app reads it is undocumented and unknown.
+
+  Turning this on publishes `<name> Grid Periodic` alongside the real grid sensor, declaring periodic and **nothing else**. If the tile populates, Home reads periodic energy; if it stays blank, it does not. The grid sensor is untouched and keeps reporting cumulative throughout.
+
+  Each reading carries `startTimestamp` and `endTimestamp` — the inverse of the cumulative rule, which omits `startTimestamp`. The cluster spec forbids it on cumulative and requires it on periodic once the server knows UTC (Matter 1.6 Cluster § 2.12.5.2.2-3), because the period is the whole meaning of the value. Periods abut exactly, and the boundary advances only when a reading is published, so a period covers every poll since the last report rather than the final slice of it.
+
+  The step detector and the opening-value notice added in 1.10.0 both skip periodic fields: a periodic value is already a difference, so falling is ordinary rather than a fault, and there is no opening bar to warn about.
+
 ## [1.10.0] - (07.09.2026)
 
 ### Added

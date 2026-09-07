@@ -161,6 +161,13 @@ class EnvoyEnergyDevice {
         // see README, "The grid sensor".
         this.gridSplit = config.gridSplit ?? false;
 
+        // An extra grid sensor reporting periodic energy instead of a running
+        // total, published beside the real one so both see the same flow at the
+        // same time. Off by default: it duplicates energy the grid sensor
+        // already reports, and exists only to find out whether the Home app
+        // reads periodic energy at all — see README, "Periodic energy".
+        this.periodicEnergyTest = config.periodicEnergyTest ?? false;
+
         // Bumping this starts a fresh history: new accessory UUIDs, so the
         // controller treats every sensor as new, and cumulative energy
         // published from zero rather than from the gateway's lifetime total.
@@ -389,6 +396,14 @@ class EnvoyEnergyDevice {
             this.log.info(`${this.prefix}Cannot determine grid flow — needs either a net-consumption CT or both production and consumption. Grid sensor not published.`);
         }
 
+        if (this.gridEnabled && grid && this.periodicEnergyTest) {
+            sensors.push({
+                kind: MeasurementKind.GridPeriodic,
+                displayName: `${this.gridName} Periodic`,
+                reading: readings[MeasurementKind.GridPeriodic]
+            });
+        }
+
         return sensors;
     }
 
@@ -405,7 +420,12 @@ class EnvoyEnergyDevice {
             [MeasurementKind.Consumption]: reading.consumption,
             [MeasurementKind.Grid]: reading.grid,
             [MeasurementKind.GridImport]: reading.grid,
-            [MeasurementKind.GridExport]: reading.grid
+            [MeasurementKind.GridExport]: reading.grid,
+            // The periodic sensor reports differences, so a baseline's constant
+            // offset cancels out of every value it publishes. It is applied
+            // anyway, uniformly with the rest, so that resetting it changes its
+            // identity the same way resetting any other sensor does.
+            [MeasurementKind.GridPeriodic]: reading.grid
         };
 
         return Object.fromEntries(

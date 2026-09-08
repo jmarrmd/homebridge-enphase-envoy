@@ -115,9 +115,15 @@ class DailyEnergy {
      *
      * @param {{imported: number, exported: number}} totals lifetime Wh
      * @param {number} now epoch ms
+     * @param {object} [options]
+     * @param {boolean} [options.spansGaps] whether the counters cover time the
+     *        plugin was not sampling. True where they are measured from the
+     *        gateway's registers, which keep counting while we are stopped —
+     *        there is then no unmeasured time to report, and saying otherwise
+     *        would tell you a whole day was suspect when it was not.
      * @returns {object|null} the closed day, or null while the day continues
      */
-    sample(totals, now = Date.now()) {
+    sample(totals, now = Date.now(), { spansGaps = false } = {}) {
         if (!isNumber(totals?.imported) || !isNumber(totals?.exported)) return null;
 
         const day = localDay(now);
@@ -129,7 +135,7 @@ class DailyEnergy {
         // Time between samples that the integrator would have skipped is time
         // this day did not measure. Counted before the rollover so it lands on
         // the day the plugin was actually absent for.
-        if (isNumber(this.mark.seenAt) && now - this.mark.seenAt > this.gapMs) {
+        if (!spansGaps && isNumber(this.mark.seenAt) && now - this.mark.seenAt > this.gapMs) {
             this.mark.gapMs += now - this.mark.seenAt;
             this.dirty = true;
         }

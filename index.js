@@ -286,7 +286,11 @@ class EnvoyEnergyDevice {
      * whole.
      */
     reportDailyGrid(grid) {
-        const closed = this.daily.sample({ imported: grid?.energyImported, exported: grid?.energyExported });
+        const closed = this.daily.sample(
+            { imported: grid?.energyImported, exported: grid?.energyExported },
+            Date.now(),
+            { spansGaps: this.client.gridEnergy?.source === 'measured' }
+        );
         if (!closed || !this.logLevel.info) return;
 
         const caveats = [];

@@ -1,45 +1,67 @@
 /**
  * gridenergy.js
  *
- * Turns a series of instantaneous grid-power samples into the two monotonic
- * counters Matter wants: cumulative energy imported from the grid and exported
- * to it.
+ * Keeps the two monotonic counters Matter wants — energy imported from the
+ * grid and energy exported to it — for a gateway that reports neither.
  *
  * Why this exists
  * ---------------
- * The gateway reports grid flow as a single *signed* power (positive drawing
- * from the utility, negative pushing back) and, for lifetime energy, a single
- * signed net figure. A signed net cannot be split back into separate import and
- * export totals — net zero could be "nothing ever happened" or "imported 100 and
- * exported 100" — so the two counters have to be accumulated as we watch.
+ * The gateway has registers for production and for house load, but nothing for
+ * either grid direction, and the split cannot be recovered after the fact: a
+ * lifetime net of 16.1 MWh is equally consistent with "imported 16.1, exported
+ * 0" and "imported 50, exported 34". You have to have been watching. So the two
+ * totals are accumulated here and persisted, because they exist nowhere else.
  *
- * Accuracy
- * --------
- * This is a Riemann sum over the poll interval, so it is an approximation, and
- * load swings between samples are invisible to it. It is strictly worse than
- * reading the gateway's own hardware counters, and is the fallback for when
- * those are not available. Two things keep it honest:
+ * Where the numbers come from
+ * ---------------------------
+ * Two sources, in order of preference.
  *
- *   - Trapezoidal rather than rectangular integration, with the interval split
- *     at the zero crossing when flow reverses mid-interval, so a sample pair
- *     that straddles zero contributes to both counters rather than to whichever
- *     sign happened to win.
- *   - A gap longer than `maxGapMs` is skipped rather than integrated. If the
- *     plugin was down for six hours, that energy is genuinely unknown; holding
- *     the last power across the gap would invent a large number.
+ * **Measured** — house load minus production, both read from the gateway's own
+ * accumulated registers. The *difference* between two readings is the net
+ * energy that actually crossed the service entrance over that interval, and it
+ * is measured rather than estimated. This module then does one job: sort each
+ * increment into the right bucket by sign. It is a bookkeeper, not a meter.
  *
- * Persistence
- * -----------
- * Counters are restored from disk on start. Matter treats cumulative energy as
- * monotonic, so a restart that reset them to zero would make the counters jump
- * backwards and corrupt the Home app's history. Saves are therefore atomic
- * (write to a temporary file, then rename over the real one), and a failed
- * load is reported rather than silently treated as a fresh start.
+ * **Integrated** — a Riemann sum over instantaneous power, used when house load
+ * is reconstructed rather than measured (no total-consumption CT), in which
+ * case the subtraction above collapses to the gateway's own signed net register
+ * and tells us nothing new. This is the older, weaker path, kept so those
+ * gateways still get a grid sensor rather than none.
+ *
+ * Why the measured path is worth the branch
+ * -----------------------------------------
+ * Integrating power means trusting `wNow` on every poll, unbounded. A single
+ * transient reading of a few hundred kW fabricates tens of kWh, and nothing
+ * downstream can tell that from real flow — measured on a live gateway as a
+ * 23 kWh "export" at five in the morning. A register cannot do that: it only
+ * ever climbs, by the amount that actually crossed it.
+ *
+ * It also spans downtime. The registers keep counting while the plugin is
+ * stopped, so the first reading after a restart carries the whole gap — which
+ * is why the last one is persisted alongside the counters. The integrated path
+ * has no such luxury and skips a gap rather than inventing across it.
+ *
+ * What is still approximate, either way
+ * -------------------------------------
+ * Direction is resolved per interval, so a poll window that swings both ways is
+ * credited entirely to whichever direction netted. Gross import and gross
+ * export each read slightly low; their difference is exact.
  */
 
 import { readJsonFile, writeJsonFileAtomic } from './jsonstore.js';
 
 const MS_PER_HOUR = 3_600_000;
+
+/**
+ * Implied power beyond which a measured increment is refused, in watts.
+ *
+ * A register normally climbs by what crossed it, but a gateway swapped, reset
+ * or reporting nonsense could step it. Skipping costs that one interval;
+ * recording it corrupts a monotonic counter permanently, which no later reading
+ * can undo. Implied power is the right test because it scales with the interval
+ * — a long gap legitimately carries a large increment at ordinary power.
+ */
+const IMPLAUSIBLE_POWER = 25_000;
 
 const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
 
@@ -47,7 +69,9 @@ class GridEnergy {
     /**
      * @param {object} options
      * @param {string} options.file    where to persist the counters
-     * @param {number} options.maxGapMs longest interval still worth integrating
+     * @param {number} options.maxGapMs longest interval still worth integrating,
+     *        on the integrated path only. The measured path has no such limit:
+     *        a register difference covers the gap by itself.
      */
     constructor({ file, maxGapMs = 300_000 }) {
         this.file = file;
@@ -55,8 +79,30 @@ class GridEnergy {
 
         this.imported = 0;   // Wh drawn from the grid, monotonic
         this.exported = 0;   // Wh sent to the grid, monotonic
+
+        // Measured path: the last net register reading, persisted so a restart
+        // differences against where it left off rather than losing the gap. Its
+        // timestamp is not persisted and does not need to be — it only scales
+        // the plausibility check, and the first increment after a restart is
+        // exactly the one that legitimately spans hours.
+        this.lastNet = null;
+        this.lastNetAt = null;
+
+        // Integrated path: the last power sample. Deliberately not persisted —
+        // holding a stale power across a restart would invent energy, and the
+        // path that needs it is the one that cannot span gaps anyway.
+        //
+        // Kept separate from the measured path's clock so neither disturbs the
+        // other, and so an unreadable sample can leave this one untouched.
         this.lastPower = null;
         this.lastAt = null;
+
+        /** @type {'measured'|'integrated'|null} which path last did the work */
+        this.source = null;
+
+        /** @type {object|null} an increment refused as implausible, for the caller to log */
+        this.skipped = null;
+
         this.dirty = false;
     }
 
@@ -84,6 +130,12 @@ class GridEnergy {
 
         if (imported) this.imported = data.imported;
         if (exported) this.exported = data.exported;
+
+        // Absent in files written before the measured path existed, and absent
+        // whenever the integrated path wrote them. Either way the next reading
+        // seeds it and one interval goes unattributed.
+        if (isNumber(data?.lastNet)) this.lastNet = data.lastNet;
+
         return { status: 'restored', error: null };
     }
 
@@ -102,6 +154,7 @@ class GridEnergy {
         const error = await writeJsonFileAtomic(this.file, {
             imported: this.imported,
             exported: this.exported,
+            lastNet: this.lastNet,
             savedAt: new Date().toISOString()
         });
         // A single failed save costs accuracy across a restart, never
@@ -112,24 +165,84 @@ class GridEnergy {
     }
 
     /**
-     * Fold one grid-power sample into the counters.
+     * Fold one reading into the counters.
      *
-     * @param {number} power  signed watts: positive importing, negative exporting
-     * @param {number} now    epoch ms for this sample
+     * @param {object} reading
+     * @param {number|null} reading.netEnergy signed Wh across the service
+     *        entrance, from the gateway's registers: positive means the house
+     *        has drawn more than the array produced. Null where unavailable,
+     *        which selects the integrated path.
+     * @param {number|null} reading.power signed watts, positive importing.
+     * @param {number} now epoch ms for this reading
      * @returns {{imported: number, exported: number}} Wh, monotonic
      */
-    sample(power, now = Date.now()) {
+    sample({ netEnergy = null, power = null } = {}, now = Date.now()) {
+        return isNumber(netEnergy)
+            ? this.measure(netEnergy, now)
+            : this.integrate(power, now);
+    }
+
+    /**
+     * Measured path: attribute the change in the net register since we last
+     * looked. No time limit — the register counted through whatever gap there
+     * was — but an increment implying impossible power is refused rather than
+     * written into a counter that can never walk it back.
+     */
+    measure(netEnergy, now) {
+        this.source = 'measured';
+
+        const elapsed = isNumber(this.lastNetAt) ? now - this.lastNetAt : null;
+        this.lastNetAt = now;
+
+        const previous = this.lastNet;
+        this.lastNet = netEnergy;
+
+        // First reading of this run: nothing to difference against.
+        if (!isNumber(previous)) {
+            this.dirty = true;
+            return this.totals();
+        }
+
+        const delta = netEnergy - previous;
+        if (delta === 0) return this.totals();
+
+        if (isNumber(elapsed) && elapsed > 0) {
+            const implied = Math.abs(delta) * MS_PER_HOUR / elapsed;
+            if (implied > IMPLAUSIBLE_POWER) {
+                this.skipped = { delta, implied, elapsed };
+                this.dirty = true;
+                return this.totals();
+            }
+        }
+
+        this.credit(delta);
+        this.dirty = true;
+        return this.totals();
+    }
+
+    /**
+     * Integrated path: a Riemann sum over the poll interval, kept for gateways
+     * whose house load is reconstructed rather than measured.
+     *
+     * A gap longer than `maxGapMs` is skipped rather than integrated. If the
+     * plugin was down for six hours that energy is genuinely unknown, and
+     * holding the last power across the gap would invent a large number.
+     */
+    integrate(power, now) {
+        this.source = 'integrated';
+
+        // An unreadable sample says nothing, so it must not move the clock
+        // either: the last known power is assumed to have continued, and the
+        // next usable reading integrates across the whole span. Advancing here
+        // would silently discard the energy either side of the gap.
         if (!isNumber(power)) return this.totals();
 
         const previousPower = this.lastPower;
-        const previousAt = this.lastAt;
+        const elapsed = isNumber(this.lastAt) ? now - this.lastAt : null;
         this.lastPower = power;
         this.lastAt = now;
 
-        // First sample after start or after a gap: nothing to integrate over.
-        if (!isNumber(previousPower) || !isNumber(previousAt)) return this.totals();
-
-        const elapsed = now - previousAt;
+        if (!isNumber(previousPower) || !isNumber(elapsed)) return this.totals();
         if (elapsed <= 0 || elapsed > this.maxGapMs) return this.totals();
 
         this.accumulate(previousPower, power, elapsed / MS_PER_HOUR);
@@ -161,6 +274,13 @@ class GridEnergy {
     credit(energy) {
         if (energy >= 0) this.imported += energy;
         else this.exported += -energy;
+    }
+
+    /** The last refused increment, for the caller to log. Cleared when read. */
+    takeSkipped() {
+        const skipped = this.skipped;
+        this.skipped = null;
+        return skipped;
     }
 
     totals() {

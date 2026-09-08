@@ -181,86 +181,20 @@ Related: a Homebridge plugin cannot set `Descriptor.TagList` on a flat endpoint,
 
 **Power** comes from the `net-consumption` CT when the gateway has one, since that is a direct measurement of the service entrance. Otherwise it is derived as `house load − production`, which is the same quantity by conservation of energy.
 
-**Energy is accumulated by the plugin**, and this is the part worth understanding before you trust the numbers. The gateway reports lifetime net as a single *signed* figure, and a signed net cannot be split back into two directions — net zero could mean nothing ever happened, or 100 kWh each way. So the plugin integrates the power samples itself:
+**Energy comes from the gateway's own registers.** House load minus production, both read from `whLifetime`, is the net energy that crossed the service entrance — measured, not estimated. Each poll takes the difference since the last reading and sorts it into a direction by sign. The plugin is a bookkeeper here, not a meter.
 
-- Trapezoidal integration over each poll interval, with the interval split at the zero crossing when flow reverses mid-interval, so a sample pair straddling zero credits both counters rather than whichever sign won.
-- A gap longer than five poll intervals is **skipped, not integrated**. If the plugin was down for six hours that energy is genuinely unknown, and holding the last power across the gap would invent a large number.
-- Counters are persisted to `<storage>/enphaseEnvoyMatter/gridEnergy_<host>.json` and restored on start, because Matter treats cumulative energy as monotonic and a restart that reset them to zero would corrupt the Home app's history.
+Two properties follow from that:
 
-The honest caveat: this is a Riemann sum at your polling rate, so swings between samples are invisible to it. Expect it to track well for slow-moving loads and to under-resolve spiky ones. It is an approximation where the production and consumption counters are the gateway's own measurements. A shorter `refreshInterval` improves it at the cost of polling the gateway harder.
+- **A transient power reading cannot inflate it.** Until v1.12.0 this integrated `wNow`, unbounded, so a single reading of a few hundred kW fabricated tens of kWh. Measured on a live gateway as a 23 kWh "export" at five in the morning, and invisible in every check we had, because 23 kWh over an hour implies only 23 kW. A register cannot do that: it climbs by what crossed it.
+- **It spans downtime.** The registers keep counting while the plugin is stopped, so the first reading after a restart carries the whole gap. The last register reading is persisted alongside the counters for exactly this reason.
 
-### Checking the numbers
+An increment implying more than 25 kW is refused rather than recorded, and logged. A gateway swapped, reset, or reporting nonsense could step a register; skipping costs that one interval, where recording corrupts a monotonic counter permanently and no later reading can walk it back.
 
-Once a local day the plugin closes the counters out and logs what crossed the meter, so its integration can be checked against the Enphase app or a utility bill without catching the counter file at midnight:
+**The integrated fallback.** A gateway with no `total-consumption` CT has its house load reconstructed as production + net, which makes `load − production` circular — it collapses back to the gateway's own signed net register and says nothing new. Those gateways keep the older path: a trapezoidal Riemann sum over the poll interval, split at the zero crossing when flow reverses, with any gap longer than five poll intervals skipped rather than integrated. It approximates at the polling rate and cannot cover time the plugin was stopped. The log says at startup which path is in use.
 
-```
-Device: envoy.local Envoy, Grid on 2026-09-05: imported 29.6 kWh, exported 4.3 kWh, net 25.3 kWh.
-```
+**Still approximate, on either path.** Direction is resolved per interval, so a poll window that swings both ways is credited entirely to whichever direction netted. Gross import and gross export each read slightly low; their difference is exact. Live power is unchanged — it still comes from the CT, so a glitch is still visible on the tile; it just can no longer reach the energy counters.
 
-Import and export are **gross** — energy that flowed each way, accumulated separately — which is the same definition the Enphase app uses for its daily Imported and Exported figures. Its "Net Imported" row is just the difference, and `net` here is the same subtraction.
-
-A day that cannot be compared fairly says so:
-
-```
-Grid on 2026-09-05: imported 18.2 kWh, exported 4.3 kWh, net 13.9 kWh (partial day, counting began mid-day; 47 min not measured).
-```
-
-`partial day` is the first day after a fresh install. `n min not measured` is time the plugin was not sampling — the integrator skips a long gap rather than integrating across it, so that day genuinely under-reports by whatever crossed the meter while Homebridge was down. The open day is persisted to `<storage>/enphaseEnvoyMatter/gridDaily_<host>.json`, so a restart at 4 p.m. does not report eight hours as a day.
-
-The line is logged at info level, once a day. It needs `gridEnabled`, and nothing else.
-
-### Periodic energy (`periodicEnergyTest`)
-
-Every awkward property of the energy this plugin publishes comes from one place: cumulative energy is a running total, and a controller has to *difference* it to get an hour. That is why a brand-new sensor records its whole opening counter as a single hour, why the total may never go backwards, why `resetHistory` exists at all, and why a gap or a changed baseline arrives as one impossible bar.
-
-Matter has a second shape. `ElectricalEnergyMeasurement` is gated on two axes — Imported/Exported × **Cumulative/Periodic** — and periodic energy reports how much crossed the meter *since the last report*. The difference is already taken, so none of the above applies: nothing to difference, no monotonicity to preserve, no opening value, and an outage costs one period rather than dumping everything into the next bucket.
-
-Homebridge supports it (`detectElectricalMeasurementClusters` picks `PeriodicEnergy` from the declared attributes, and `StateManager` routes both directions through matter.js `setMeasurement`). Whether the **Home app reads it** is the open question — the Energy view is undocumented, and we already know it treats a two-directional endpoint oddly.
-
-Setting `"periodicEnergyTest": true` publishes an extra sensor to answer that:
-
-```
-<name> Grid Periodic   periodicEnergyImported, periodicEnergyExported
-```
-
-It declares periodic and **nothing else** — no cumulative counter beside it — so the result is unambiguous: if the tile populates, Home reads periodic energy; if it stays blank, it does not. The real grid sensor is untouched and keeps reporting cumulative throughout, so nothing is at risk either way.
-
-Each reading carries `startTimestamp` and `endTimestamp`, which is the inverse of the cumulative rule: the cluster spec says `startTimestamp` **shall be omitted** for cumulative energy but **shall be indicated** for periodic once the server knows UTC (Matter 1.6 Cluster § 2.12.5.2.2–3) — the period is the whole meaning of the value. Periods abut exactly, each beginning where the last ended, and the boundary advances only when a reading is actually published, so a period covers every poll since the previous report rather than the last slice of it. A period always spans at least a second — `EndTimestamp` carries `min startTimestamp + 1` in the data model, and matter.js fails the whole accessory over a zero-length one rather than just dropping the reading.
-
-Leave it off unless you are running the comparison — it reports energy the grid sensor already reports.
-
-### When a chart shows an impossible bar
-
-A controller draws each hourly bar by differencing the cumulative counter, so anything that moves a counter other than real flow arrives as one enormous hour. A 50 kWh bar is 50 kW for an hour — not load, and by the time it appears the cause is a day old. Two lines catch it at the source.
-
-**At registration**, each sensor says what it opens at:
-
-```
-Envoy Grid opens at cumulativeEnergyImported 49.9 kWh, cumulativeEnergyExported 10.3 kWh. A controller that has not seen this device before has nothing to difference against, so the Home app records the opening value as a single hour of energy …
-```
-
-That opening value *is* tomorrow's first bar. It is a one-off and the bars after it are real, but if you would rather not have it, bump that sensor's `resetHistory` so it opens at zero. Below 1 kWh the line drops to debug, since opening near zero is the intended state after a reset.
-
-**While running**, a step in a published counter is reported as the power it implies:
-
-```
-Envoy Grid cumulativeEnergyImported 232.5 kWh, +232.4 kWh in 60 s (13,942 kW implied). That is not load. …
-```
-
-Anything past 50 kW implied — more than a residential service can pass — warns, as does a counter going backwards, which Matter forbids and which makes a controller discard readings until the total climbs past what it last saw. Ordinary movement is logged at debug with the same shape, so `log.debug` gives a per-minute series of exactly what was published.
-
-The usual causes of a step are a counter file or baseline that changed underneath the sensor, or a history reset. **Changing a sensor's generation is itself a step** — see below.
-
-### Resetting, and un-resetting
-
-`resetHistory` and `resetHistoryPerSensor` fold a generation into a sensor's identity, so bumping one presents a new device to the controller and starts its history over. The part that is easy to miss is the inverse: **holding a generation constant is how a sensor keeps a device it already has.**
-
-Change a sensor's shape — `gridSplit`, or which endpoint carries the grid — and it is the generation, not the display name, that decides whether the controller sees the same device or a new one. Two consequences worth knowing before you touch either setting:
-
-- Setting a generation *back* to a value used before re-adopts that device, history intact, along with the baseline captured for it.
-- Setting a generation to `0` removes the baseline entirely, so the sensor publishes the gateway's raw counters rather than the offset ones. On a counter standing at 232 kWh that is a 232 kWh step, and the chart above is what it looks like.
-
-So a generation is not a "clear history" button to try things with. Pick one and leave it; every change costs the sensor its history and buys a spurious bar.
+Counters are persisted to `<storage>/enphaseEnvoyMatter/gridEnergy_<host>.json` and restored on start, because Matter treats cumulative energy as monotonic and a restart that reset them to zero would corrupt the Home app's history.
 
 **Integrating is not a workaround for a missing endpoint — it is the only thing that can work.** Checked against a real gateway (IQ Gateway, firmware D8.3.5289):
 

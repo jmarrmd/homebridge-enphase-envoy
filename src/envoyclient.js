@@ -331,13 +331,24 @@ class EnvoyClient extends EventEmitter {
             this.emit('debug', `${ApiUrls.SystemReadingStats} unavailable (${error.message ?? error}), falling back`);
         }
 
-        const production = this.parseProduction(stats)
-            ?? await this.readProductionFallback();
-        const consumption = this.parseConsumption(stats, production);
+        // Floored before the grid sees them. Grid energy is now the *difference*
+        // between these two registers, so a momentary dip in either would read
+        // as flow that never happened — credited to one direction on the dip and
+        // to the other on the recovery, inflating both counters permanently.
+        // The high-water mark holds them monotonic, which is exactly what makes
+        // the difference trustworthy.
+        const production = this.applyEnergyFloor(
+            MeasurementKind.Production,
+            this.parseProduction(stats) ?? await this.readProductionFallback()
+        );
+        const consumption = this.applyEnergyFloor(
+            MeasurementKind.Consumption,
+            this.parseConsumption(stats, production)
+        );
 
         return {
-            production: this.applyEnergyFloor(MeasurementKind.Production, production),
-            consumption: this.applyEnergyFloor(MeasurementKind.Consumption, consumption),
+            production,
+            consumption,
             grid: this.readGrid(stats, production, consumption)
         };
     }
@@ -351,10 +362,19 @@ class EnvoyClient extends EventEmitter {
      *
      * Power comes from the net-consumption CT where the gateway has one, since
      * that is a direct measurement; otherwise it is derived as load minus
-     * production, which is the same quantity by conservation. Energy is
-     * accumulated from those samples, because the gateway reports lifetime net
-     * as a single signed figure that cannot be split back into the two
-     * directions Matter wants.
+     * production, which is the same quantity by conservation.
+     *
+     * Energy no longer comes from that power. House load minus production, both
+     * read from the gateway's own accumulated registers, is the net energy that
+     * crossed the service entrance — measured, not estimated — and `GridEnergy`
+     * sorts each increment into a direction. Integrating `wNow` is unbounded and
+     * a single transient reading of a few hundred kW fabricates tens of kWh; a
+     * register cannot do that.
+     *
+     * The subtraction only says something when house load was *measured*. Where
+     * it was reconstructed as production plus net, it collapses back to the
+     * gateway's own signed net register, so there is nothing to gain and the
+     * integrated path is used instead.
      *
      * @returns {object|null} `{ power, energyImported, energyExported, voltage }`
      */
@@ -369,9 +389,15 @@ class EnvoyClient extends EventEmitter {
             ? measured.power
             : this.subtractOrNull(consumption?.power, production?.power);
 
-        if (!isNumber(power)) return null;
+        const netEnergy = this.consumptionMeasured
+            ? this.subtractOrNull(consumption?.energyLifetime, production?.energyLifetime)
+            : null;
 
-        const { imported, exported } = this.gridEnergy.sample(power);
+        if (!isNumber(power) && !isNumber(netEnergy)) return null;
+
+        const { imported, exported } = this.gridEnergy.sample({ netEnergy, power });
+        this.reportGridSource();
+
         return {
             power,
             energyImported: imported,
@@ -379,6 +405,28 @@ class EnvoyClient extends EventEmitter {
             voltage: measured?.voltage ?? null,
             current: null
         };
+    }
+
+    /**
+     * Say once which source the grid counters are running on, and speak up
+     * every time an increment is refused.
+     *
+     * Which path is in use changes what the numbers mean and how much to trust
+     * them, and nothing else in the log would reveal it.
+     */
+    reportGridSource() {
+        const source = this.gridEnergy.source;
+        if (source && source !== this.reportedGridSource) {
+            this.reportedGridSource = source;
+            this.emit('info', source === 'measured'
+                ? 'Grid energy is measured: house load minus production, from the gateway\'s own registers. Increments carry across restarts, and a transient power reading cannot inflate them.'
+                : 'Grid energy is integrated from instantaneous power, because house load is reconstructed rather than measured on this gateway (no total-consumption CT). It approximates at the polling rate and cannot cover time the plugin was stopped.');
+        }
+
+        const skipped = this.gridEnergy.takeSkipped();
+        if (!skipped) return;
+
+        this.emit('warn', `Refused a grid energy increment of ${skipped.delta.toFixed(1)} Wh over ${Math.round(skipped.elapsed / 1000)} s — an implied ${Math.round(skipped.implied)} W, which is not load. The gateway's registers stepped rather than counted. That interval is not recorded; the counters keep the value they had.`);
     }
 
     /** Persist the grid counters so a restart does not rewind them. */
@@ -423,7 +471,16 @@ class EnvoyClient extends EventEmitter {
         const entries = Array.isArray(stats?.consumption) ? stats.consumption : [];
 
         const total = entries.find((entry) => entry?.measurementType === 'total-consumption');
-        if (total) return this.toReading(total);
+        if (total) {
+            this.consumptionMeasured = true;
+            return this.toReading(total);
+        }
+
+        // Reconstructed rather than measured. Grid energy cannot be derived from
+        // it: consumption - production collapses back to the gateway's own
+        // signed net register, whose behaviour on export this plugin has never
+        // been able to verify. readGrid() integrates power instead.
+        this.consumptionMeasured = false;
 
         const net = entries.find((entry) => entry?.measurementType === 'net-consumption');
         if (!net || !production) return null;

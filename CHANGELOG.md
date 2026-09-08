@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.12.0] - (08.09.2026)
+
+### Changed
+
+- **Grid energy is measured from the gateway's registers instead of integrated from power.** House load minus production, both from `whLifetime`, is the net energy that actually crossed the service entrance. Each poll takes the difference and sorts it into a direction by sign.
+
+  The old path integrated `wNow` on every poll, unbounded. A single transient reading of a few hundred kW fabricates tens of kWh, and nothing downstream could tell that from real flow — observed on a live gateway as a **23 kWh "export" at five in the morning**, which no check caught because 23 kWh over an hour implies only 23 kW. A register cannot do that; it climbs by what crossed it. This is also why the production and consumption sensors were never affected: they read registers and never touched `wNow` for energy.
+
+  It spans downtime too. The registers keep counting while the plugin is stopped, so the first reading after a restart carries the whole gap — the last register reading is now persisted alongside the counters for that. The daily summary stops reporting "not measured" time on this path, because there no longer is any.
+
+  Both registers are floored to their high-water mark *before* the grid sees them: grid energy is now their difference, so a dip in either would read as flow that never happened, credited to one direction on the dip and the other on the recovery, inflating both permanently.
+
+  An increment implying more than 25 kW is refused and logged. Skipping costs one interval; recording corrupts a monotonic counter forever.
+
+- **Integrating power is now the fallback**, used only where house load is reconstructed rather than measured (no `total-consumption` CT), since `load - production` is circular there. Its behaviour is unchanged. The log says at startup which path is in use, because it changes what the numbers mean.
+
+### Fixed
+
+- **The step detector missed the failure it existed for.** Its 50 kW ceiling let 23 kWh in an hour through unremarked. The ceiling is now 25 kW, and the primary test is no longer absolute: live power and the cumulative total come from the same reading, so a counter that moves further than the reported power can account for is contradicting itself at any scale.
+
+- `GridEnergy.skipped` was never initialised, so it read `undefined` rather than `null`.
+
 ## [1.11.1] - (07.09.2026)
 
 ### Fixed

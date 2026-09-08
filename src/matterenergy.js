@@ -243,10 +243,32 @@ const OPENING_ENERGY_NOTICE = 1_000_000;
  * genuine surge or a bookkeeping accident — a baseline that moved, a counter
  * file that was lost, a controller resuming after a gap it could not see. Only
  * the last of those ever surfaces, days later, as one absurd bar in a chart.
- * Power is the part that is physically bounded — a residential service is a
- * couple of hundred amps — so an implied power beyond this is the accident.
+ *
+ * Set from what a residential service can actually pass. The first value here
+ * was 50 kW, which let a 23 kWh hour through unremarked — impossible flow that
+ * still implied only 23 kW. An absolute bound this loose catches the absurd and
+ * misses the merely wrong, which is why it is now the *second* test.
  */
-const IMPLAUSIBLE_POWER = 50_000;
+const IMPLAUSIBLE_POWER = 25_000;
+
+/**
+ * How far a counter may move beyond what the reported power accounts for.
+ *
+ * The sharper test is not an absolute ceiling but a contradiction: live power
+ * and the cumulative total come from the same reading, so they should agree
+ * about roughly how much energy an interval held. A counter that moves 4 kWh in
+ * a minute while we report 500 W is wrong at any scale, where an absolute bound
+ * only catches it if the number happens to be large enough.
+ *
+ * Both terms are deliberately loose. Power is instantaneous at the end of the
+ * interval while energy covers all of it, so a surge that has passed by the
+ * time we read it is ordinary rather than a fault — the multiplier absorbs a
+ * reading that under-represents its own interval, and the allowance, expressed
+ * as watts so it scales with the interval rather than swamping a short one,
+ * absorbs the case where power reads near zero at the moment we look.
+ */
+const POWER_CONSISTENCY_FACTOR = 4;
+const POWER_CONSISTENCY_ALLOWANCE = 5_000;
 
 /**
  * Energy accumulated since an anchor. The counters underneath are monotonic, so
@@ -261,6 +283,18 @@ const since = (total, anchor) => {
 
 /** Kilowatt-hours from milliwatt-hours, for the log. */
 const kwh = (milliWattHours) => `${(milliWattHours / 1_000_000).toFixed(1)} kWh`;
+
+/**
+ * The power that should account for movement in one energy attribute. Imported
+ * energy is answered for by power flowing in, exported by power flowing out —
+ * on the combined grid endpoint those are the two signs of one number.
+ */
+const directionalPower = (field, power) => {
+    if (!Number.isFinite(power)) return null;
+    if (field.endsWith('Imported')) return Math.max(0, power);
+    if (field.endsWith('Exported')) return Math.max(0, -power);
+    return Math.abs(power);
+};
 
 /** Watts, in the unit that keeps the number readable. */
 const watts = (value) => (Math.abs(value) >= 10_000
@@ -558,7 +592,7 @@ class MatterEnergyBridge {
      * chart — so it is caught here, at the moment it is published, where the
      * size and the interval are both still known.
      */
-    reportEnergyStep(sensor, energy, now) {
+    reportEnergyStep(sensor, energy, now, power) {
         const values = energyValuesOf(energy);
         const previous = sensor.energyValues;
         const elapsed = now - sensor.energyValuesAt;
@@ -587,10 +621,28 @@ class MatterEnergyBridge {
                 this.log.warn(`${this.prefix}${step}. Cumulative energy went backwards, which Matter does not allow — a controller may discard readings until it climbs past what it saw before. The counter file or a baseline has probably been lost or rewritten.`);
             } else if (implied > IMPLAUSIBLE_POWER) {
                 this.log.warn(`${this.prefix}${step}. That is not load. A controller charts a step like this as one hour's energy, so expect a tall bar. Usual causes: the counter file or a baseline changed underneath, or this sensor's history was reset.`);
+            } else if (this.contradictsPower(field, delta, elapsed, power)) {
+                this.log.warn(`${this.prefix}${step}, while live power reads ${watts(directionalPower(field, power) ?? 0)}. The counter and the power reading disagree about this interval, so one of them is wrong. A counter that climbs faster than the power can account for is the shape a bad reading leaves behind.`);
             } else {
                 this.log.debug(`${this.prefix}${step}.`);
             }
         }
+    }
+
+    /**
+     * Whether a counter moved further than the power we published alongside it
+     * could account for. Returns false when there is no power to compare
+     * against — an unknown reading is not evidence of anything.
+     */
+    contradictsPower(field, delta, elapsed, power) {
+        const directional = directionalPower(field, power);
+        if (!Number.isFinite(directional) || !Number.isFinite(elapsed) || elapsed <= 0) return false;
+
+        // delta is mWh, power is W, elapsed is ms. W sustained over elapsed ms
+        // is `W * elapsed / 3_600_000` Wh, and a thousand times that in mWh —
+        // so `W * elapsed / 3600` puts the bound in the counter's own units.
+        const bound = (directional * POWER_CONSISTENCY_FACTOR + POWER_CONSISTENCY_ALLOWANCE) * elapsed / 3600;
+        return delta > bound;
     }
 
     /**
@@ -617,7 +669,7 @@ class MatterEnergyBridge {
         if ((changed && due) || heartbeat) {
             sensor.lastEnergy = energy;
             sensor.lastEnergyAt = now;
-            this.reportEnergyStep(sensor, clusters.electricalEnergyMeasurement, now);
+            this.reportEnergyStep(sensor, clusters.electricalEnergyMeasurement, now, powerFor(sensor.kind, reading));
             // The period just reported ends here, so the next one starts here.
             // Advanced only on a publish: moving it every poll would report a
             // 30-second slice as if it were the whole minute.

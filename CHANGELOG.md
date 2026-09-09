@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.14.1] - (09.09.2026)
+
+### Fixed
+
+Two latent holes in the register pin, found on an independent review of the grid path. Neither changes any published number on a healthy gateway; both would have produced a permanently wrong counter on an unlucky one. The grid arithmetic itself was verified against an analytic day at 1-second resolution and matches to 0.01 % on net, 0.00 % on each direction.
+
+- **A first reading without `whLifetime` pinned production to the lines sum for the life of the run.** `toReading` falls through to summing an entry's `lines[]` when it has no total; that became the pin, and every normal reading afterwards — the real register — was refused with a warning. Same shape as the night-restart hole in v1.13.1, one level down. The pin is now to the physical source only, the entry total is locked to once it has ever been seen, and a lines-only reading defers rather than pins: energy is held for up to ten polls waiting for a total, so a transient omission at startup costs thirty seconds instead of the run. A gateway that genuinely never sends a total settles on lines after that, and stays there.
+
+- **The first increment after a restart bypassed the plausibility guard.** `lastNet` was persisted but not `lastNetAt`, so the increment had no elapsed time to be judged against and was credited unexamined — a register that reset while the plugin was down would have landed in full. Both are persisted now. A genuine outage still attributes in full, because hours of elapsed time make any real increment imply ordinary power.
+
 ## [1.14.0] - (09.09.2026)
 
 ### Removed

@@ -80,11 +80,14 @@ class GridEnergy {
         this.imported = 0;   // Wh drawn from the grid, monotonic
         this.exported = 0;   // Wh sent to the grid, monotonic
 
-        // Measured path: the last net register reading, persisted so a restart
-        // differences against where it left off rather than losing the gap. Its
-        // timestamp is not persisted and does not need to be — it only scales
-        // the plausibility check, and the first increment after a restart is
-        // exactly the one that legitimately spans hours.
+        // Measured path: the last net register reading and when it was taken,
+        // both persisted. The reading is what a restart differences against, so
+        // the gap is attributed rather than lost. The timestamp is what scales
+        // the plausibility check — without it the first increment after a
+        // restart went unguarded, and a register that reset while the plugin
+        // was down would have been credited in full. A genuine gap still
+        // passes: hours of elapsed time make even a large increment imply
+        // ordinary power.
         this.lastNet = null;
         this.lastNetAt = null;
 
@@ -135,6 +138,7 @@ class GridEnergy {
         // whenever the integrated path wrote them. Either way the next reading
         // seeds it and one interval goes unattributed.
         if (isNumber(data?.lastNet)) this.lastNet = data.lastNet;
+        if (isNumber(data?.lastNetAt)) this.lastNetAt = data.lastNetAt;
 
         return { status: 'restored', error: null };
     }
@@ -155,6 +159,7 @@ class GridEnergy {
             imported: this.imported,
             exported: this.exported,
             lastNet: this.lastNet,
+            lastNetAt: this.lastNetAt,
             savedAt: new Date().toISOString()
         });
         // A single failed save costs accuracy across a restart, never

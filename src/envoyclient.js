@@ -72,6 +72,16 @@ class EnvoyClient extends EventEmitter {
             [MeasurementKind.Consumption]: 0
         };
 
+        // The register each measurement's lifetime energy was first read from.
+        // A gateway offers the same quantity from several counters with
+        // different values; switching between them steps a monotonic total.
+        // See pinEnergySource().
+        this.energySource = {
+            [MeasurementKind.Production]: null,
+            [MeasurementKind.Consumption]: null
+        };
+        this.warnedEnergySource = {};
+
         // Chosen during connect(): https for token firmware, http otherwise.
         this.url = this.tokenMode > TokenMode.None ? `https://${this.host}` : `http://${this.host}`;
     }
@@ -317,6 +327,53 @@ class EnvoyClient extends EventEmitter {
     // ── Readings ───────────────────────────────────────────────────────────────
 
     /**
+     * Hold each measurement's cumulative energy to the register it was first
+     * read from.
+     *
+     * A gateway offers the same quantity from several counters, and this plugin
+     * picks between them per reading: production can come from the CT entry's
+     * own total, from the sum of that entry's lines, from the microinverters'
+     * self-reports, or from `/api/v1/production`. Those are four different
+     * registers with four different values. Switching between them mid-run
+     * steps a monotonic counter by the difference — and the high-water floor
+     * does not catch it, because it clamps decreases and a switch upward is an
+     * increase.
+     *
+     * That was survivable while each sensor only published its own register.
+     * Grid energy is now `consumption - production`, so a step in either lands
+     * straight in the grid counters, one-directionally: production jumping up
+     * reads as energy exported. Overnight, when the CT's reporting state
+     * changes, that is a large export that never happened.
+     *
+     * So the source is pinned. Power still comes from whichever entry is
+     * reporting — it is instantaneous and switching is fine — but the lifetime
+     * register does not move. If the pinned one stops being offered, this
+     * reports no energy rather than a different counter's, and the floor holds
+     * the last value until it returns.
+     *
+     * @param {string} kind one of MeasurementKind
+     * @param {object|null} reading
+     */
+    pinEnergySource(kind, reading) {
+        if (!reading) return reading;
+
+        const source = reading.energySource ?? null;
+        const pinned = this.energySource[kind];
+
+        if (!pinned) {
+            if (source) this.energySource[kind] = source;
+            return reading;
+        }
+        if (!source || source === pinned) return reading;
+
+        if (!this.warnedEnergySource[kind]) {
+            this.warnedEnergySource[kind] = true;
+            this.emit('warn', `${kind} lifetime energy is being offered by "${source}" instead of "${pinned}", which this reading was pinned to. Those are different registers on the gateway, and taking the new one would step a counter that may never go backwards. Holding the last known value instead. If the gateway has genuinely lost "${pinned}", restart to re-pin.`);
+        }
+        return { ...reading, energyLifetime: null };
+    }
+
+    /**
      * Read current production and consumption.
      *
      * @returns {Promise<{production: object|null, consumption: object|null}>}
@@ -339,11 +396,11 @@ class EnvoyClient extends EventEmitter {
         // the difference trustworthy.
         const production = this.applyEnergyFloor(
             MeasurementKind.Production,
-            this.parseProduction(stats) ?? await this.readProductionFallback()
+            this.pinEnergySource(MeasurementKind.Production, this.parseProduction(stats) ?? await this.readProductionFallback())
         );
         const consumption = this.applyEnergyFloor(
             MeasurementKind.Consumption,
-            this.parseConsumption(stats, production)
+            this.pinEnergySource(MeasurementKind.Consumption, this.parseConsumption(stats, production))
         );
 
         return {
@@ -384,7 +441,7 @@ class EnvoyClient extends EventEmitter {
         const entries = Array.isArray(stats?.consumption) ? stats.consumption : [];
         const net = entries.find((entry) => entry?.measurementType === 'net-consumption');
 
-        const measured = net ? this.toReading(net) : null;
+        const measured = net ? this.toReading(net, 'net-consumption') : null;
         const power = measured && isNumber(measured.power)
             ? measured.power
             : this.subtractOrNull(consumption?.power, production?.power);
@@ -456,10 +513,10 @@ class EnvoyClient extends EventEmitter {
         const entries = Array.isArray(stats?.production) ? stats.production : [];
 
         const eim = entries.find((entry) => entry?.type === 'eim' && (entry.activeCount ?? 0) > 0);
-        if (eim) return this.toReading(eim);
+        if (eim) return this.toReading(eim, 'eim');
 
         const pcu = entries.find((entry) => entry?.type === 'inverters');
-        return pcu ? this.toReading(pcu) : null;
+        return pcu ? this.toReading(pcu, 'inverters') : null;
     }
 
     /**
@@ -473,7 +530,7 @@ class EnvoyClient extends EventEmitter {
         const total = entries.find((entry) => entry?.measurementType === 'total-consumption');
         if (total) {
             this.consumptionMeasured = true;
-            return this.toReading(total);
+            return this.toReading(total, 'total-consumption');
         }
 
         // Reconstructed rather than measured. Grid energy cannot be derived from
@@ -485,10 +542,11 @@ class EnvoyClient extends EventEmitter {
         const net = entries.find((entry) => entry?.measurementType === 'net-consumption');
         if (!net || !production) return null;
 
-        const netReading = this.toReading(net);
+        const netReading = this.toReading(net, 'net-consumption');
         return {
             power: this.addOrNull(production.power, netReading.power),
             energyLifetime: this.addOrNull(production.energyLifetime, netReading.energyLifetime),
+            energySource: 'derived',
             voltage: netReading.voltage,
             current: null
         };
@@ -503,6 +561,7 @@ class EnvoyClient extends EventEmitter {
             return {
                 power: data.wattsNow,
                 energyLifetime: num(data.wattHoursLifetime),
+                energySource: 'api/v1',
                 voltage: null,
                 current: null
             };
@@ -518,14 +577,20 @@ class EnvoyClient extends EventEmitter {
      * Lifetime energy is taken from the entry total, falling back to summing the
      * per-line values on gateways that only populate `lines`.
      */
-    toReading(entry) {
+    toReading(entry, source = 'unknown') {
         const lines = Array.isArray(entry.lines) ? entry.lines : [];
         const lineTotal = lines.reduce((sum, line) => sum + (num(line?.whLifetime) ?? 0), 0);
         const whLifetime = num(entry.whLifetime);
+        const fromLines = whLifetime === null && lines.length > 0;
+        const energyLifetime = whLifetime ?? (fromLines ? lineTotal : null);
 
         return {
             power: num(entry.wNow),
-            energyLifetime: whLifetime ?? (lines.length ? lineTotal : null),
+            energyLifetime,
+            // Which register this lifetime came from. The entry's own total and
+            // the sum of its lines are different counters, so switching between
+            // them steps the reading just as switching entries does.
+            energySource: energyLifetime === null ? null : `${source}${fromLines ? '/lines' : ''}`,
             voltage: num(entry.rmsVoltage),
             current: num(entry.rmsCurrent)
         };

@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.12.1] - (09.09.2026)
+
+### Fixed
+
+- **The line saying which source grid energy runs on never reached the log.** `EnvoyClient` announced it with `emit('info')`, and nothing subscribed to `'info'` — `EventEmitter` drops an unheard event without a word. So the one line that says what the plugin is actually doing went nowhere, and a fix could not be confirmed as running. Added the missing listener.
+
+  The new `events` suite checks the wiring rather than the message: every event name emitted anywhere in `src/` must have a listener in `index.js`, and the grid-source line is then run end to end through the plugin on both paths to prove it comes out. A listener wired to the wrong log level would pass the static check alone.
+
 ## [1.12.0] - (08.09.2026)
 
 ### Changed

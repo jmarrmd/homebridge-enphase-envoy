@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.13.0] - (09.09.2026)
+
+### Fixed
+
+- **Lifetime energy could switch registers mid-run, and that was the cause of the overnight export spikes.** A gateway offers production's lifetime from four different counters: the production CT entry's own `whLifetime`, the sum of that entry's `lines`, the microinverters' entry, and `/api/v1/production`. They hold different values, and the plugin picked between them per reading — by `activeCount`, and by which fields happened to be present.
+
+  When the production CT stops reporting overnight, the reading fell through to the microinverters' counter. If that one is higher, production appears to jump, and the high-water floor does not catch it: the floor clamps decreases, and a switch upward is an increase.
+
+  That was survivable while each sensor published only its own register. Since v1.12.0 grid energy is `consumption - production`, so a step in production lands straight in the grid counters — and only one way, because production rising reads as energy *exported*. Overnight. Which is exactly the shape observed on a live gateway: large green bars, clustered in the evening and small hours, never during the day.
+
+  Each measurement's lifetime register is now pinned to whichever one it was first read from. If the pinned one stops being offered, the plugin reports no energy for that reading and the floor holds the last value, with a warning naming both registers, rather than silently taking a different counter's. Live power is deliberately not pinned — it is instantaneous, and switching sources for it is correct.
+
+  This is a bug v1.12.0 introduced by making grid energy depend on production's register without checking that it was a single stable source.
+
 ## [1.12.1] - (09.09.2026)
 
 ### Fixed

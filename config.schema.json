@@ -153,38 +153,6 @@
                                 "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
                             }
                         },
-                        "periodicEnergyTest": {
-                            "title": "Publish a periodic-energy test sensor",
-                            "type": "boolean",
-                            "default": false,
-                            "required": false,
-                            "description": "Publishes an extra grid sensor, \"<Grid name> Periodic\", reporting how much energy crossed the meter since its last report instead of a running total a controller has to difference. It declares periodic energy and nothing else, so whether the Home app populates it is an unambiguous answer. Leave this off unless you are running that comparison \u2014 it reports energy the real grid sensor already reports. It exists because every awkward thing about cumulative energy comes from the differencing: a brand-new sensor records its whole opening counter as one hour, a counter may never go backwards, and a reset or an outage lands as one impossible bar. Periodic has none of those properties, if a controller reads it.",
-                            "condition": {
-                                "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
-                            }
-                        },
-                        "resetHistory": {
-                            "title": "Reset energy history (generation)",
-                            "type": "integer",
-                            "default": 0,
-                            "minimum": 0,
-                            "required": false,
-                            "description": "Increase this number to start the Home app's energy history over. The sensors are republished under new identities, so the Home app treats them as new devices, and cumulative energy is published from zero instead of from the gateway's lifetime total. Use it when a sensor's history is unusable \u2014 for example when a newly added sensor recorded its entire lifetime counter as a single hour, which sets the chart axis and makes every real bar beside it unreadable. Leave at 0 to keep publishing the gateway's own lifetime totals. The old sensors and their history stay in the Home app under their previous identity until you remove them there; the new ones start empty and need a day of data before they appear in Electricity Usage."
-                        },
-                        "resetHistoryPerSensor": {
-                            "title": "Reset energy history \u2014 individual sensors",
-                            "type": "object",
-                            "required": false,
-                            "description": "Per-sensor overrides of the reset generation above. Set one to start just that sensor's history over while every other sensor keeps its own. An override replaces the value above for that sensor rather than adding to it.",
-                            "properties": {
-                                "production": { "title": "Solar production", "type": "integer", "minimum": 0, "required": false },
-                                "consumption": { "title": "Home consumption", "type": "integer", "minimum": 0, "required": false },
-                                "gridImport": { "title": "Grid import", "type": "integer", "minimum": 0, "required": false },
-                                "gridExport": { "title": "Grid export", "type": "integer", "minimum": 0, "required": false },
-                                "grid": { "title": "Grid (combined sensor)", "type": "integer", "minimum": 0, "required": false },
-                                "gridPeriodic": { "title": "Grid periodic test sensor", "type": "integer", "minimum": 0, "required": false }
-                            }
-                        },
                         "energyDeviceTypes": {
                             "title": "Use Matter energy device types",
                             "type": "boolean",
@@ -276,14 +244,6 @@
                         "devices[].gridEnabled",
                         "devices[].gridName",
                         "devices[].gridSplit",
-                        "devices[].periodicEnergyTest",
-                        "devices[].resetHistory",
-                        "devices[].resetHistoryPerSensor.production",
-                        "devices[].resetHistoryPerSensor.consumption",
-                        "devices[].resetHistoryPerSensor.gridImport",
-                        "devices[].resetHistoryPerSensor.gridExport",
-                        "devices[].resetHistoryPerSensor.grid",
-                        "devices[].resetHistoryPerSensor.gridPeriodic",
                         "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]

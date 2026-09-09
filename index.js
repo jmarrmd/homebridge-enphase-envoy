@@ -15,7 +15,6 @@
 import { join } from 'path';
 import { mkdirSync } from 'fs';
 import EnvoyClient, { TokenMode } from './src/envoyclient.js';
-import EnergyBaseline from './src/baseline.js';
 import DailyEnergy from './src/dailyenergy.js';
 import MatterEnergyBridge from './src/matterenergy.js';
 import { PluginName, PlatformName, StorageDir, MeasurementKind } from './src/constants.js';
@@ -106,7 +105,6 @@ class EnvoyPlatform {
             tokenMode,
             tokenFile: join(prefDir, `envoyToken_${host.replaceAll('.', '')}`),
             gridFile: join(prefDir, `gridEnergy_${host.replaceAll('.', '')}.json`),
-            baselineFile: join(prefDir, `baseline_${host.replaceAll('.', '')}.json`),
             dailyFile: join(prefDir, `gridDaily_${host.replaceAll('.', '')}.json`),
             log: this.log,
             api: this.api
@@ -130,7 +128,7 @@ class EnvoyPlatform {
  * One Envoy gateway: connect, publish its sensors to Matter, then poll.
  */
 class EnvoyEnergyDevice {
-    constructor({ config, host, name, tokenMode, tokenFile, gridFile, baselineFile, dailyFile, log, api }) {
+    constructor({ config, host, name, tokenMode, tokenFile, gridFile, dailyFile, log, api }) {
         this.config = config;
         this.host = host;
         this.name = name;
@@ -160,23 +158,6 @@ class EnvoyEnergyDevice {
         // endpoints is the fallback for a controller that mishandles the pair —
         // see README, "The grid sensor".
         this.gridSplit = config.gridSplit ?? false;
-
-        // An extra grid sensor reporting periodic energy instead of a running
-        // total, published beside the real one so both see the same flow at the
-        // same time. Off by default: it duplicates energy the grid sensor
-        // already reports, and exists only to find out whether the Home app
-        // reads periodic energy at all — see README, "Periodic energy".
-        this.periodicEnergyTest = config.periodicEnergyTest ?? false;
-
-        // Bumping this starts a fresh history: new accessory UUIDs, so the
-        // controller treats every sensor as new, and cumulative energy
-        // published from zero rather than from the gateway's lifetime total.
-        this.resetHistory = Math.max(0, Math.trunc(Number(config.resetHistory) || 0));
-        this.baseline = new EnergyBaseline({
-            file: baselineFile,
-            generation: this.resetHistory,
-            perSensor: config.resetHistoryPerSensor ?? {}
-        });
 
         // Integrating across a long outage would invent energy that was never
         // measured, so anything beyond a few missed polls is treated as a gap —
@@ -211,8 +192,7 @@ class EnvoyEnergyDevice {
             prefix: this.prefix,
             // solarPowerDeviceType is the v1.1.0 name, kept working because it
             // covered production only; the option now covers both sensors.
-            energyDeviceTypes: config.energyDeviceTypes ?? config.solarPowerDeviceType ?? false,
-            generationFor: (kind) => this.baseline.generationFor(kind)
+            energyDeviceTypes: config.energyDeviceTypes ?? config.solarPowerDeviceType ?? false
         });
 
         this.pollTimer = null;
@@ -222,46 +202,8 @@ class EnvoyEnergyDevice {
     }
 
     /**
-     * Restore the energy baselines, reporting anything that would silently
-     * change what the controller sees.
-     */
-    async loadBaseline() {
-        const { status, error } = await this.baseline.load();
-
-        if (status === 'unreadable' && this.logLevel.warn) {
-            this.log.warn(`${this.prefix}Stored energy baselines could not be read (${error}). They will be captured again from the next reading, so cumulative energy restarts at zero for any sensor with resetHistory set.`);
-        } else if (this.logLevel.debug) {
-            this.log.info(`${this.prefix}debug: energy baselines ${status}`);
-        }
-
-        // Say which sensors are publishing under a reset identity, since it
-        // explains why their history in the Home app starts where it does.
-        if (this.baseline.enabled && this.logLevel.info) {
-            const reset = Object.values(MeasurementKind)
-                .filter((kind) => this.baseline.generationFor(kind) > 0)
-                .map((kind) => `${kind} (generation ${this.baseline.generationFor(kind)})`);
-            this.log.info(`${this.prefix}Publishing from a reset history: ${reset.join(', ')}. These appear in the Home app as new devices with cumulative energy starting at zero; the previous ones keep their history under their old identity until removed there.`);
-        }
-    }
-
-    /** Persist newly captured baselines. Warn once if that keeps failing. */
-    async saveBaseline() {
-        const error = await this.baseline.save();
-        if (!error) return;
-
-        const message = `Could not save energy baselines: ${error}`;
-        if (this.warnedBaselineSave) {
-            if (this.logLevel.debug) this.log.info(`${this.prefix}debug: ${message}`);
-        } else {
-            this.warnedBaselineSave = true;
-            if (this.logLevel.warn) this.log.warn(`${this.prefix}${message}`);
-        }
-    }
-
-    /**
      * Restore the open day. A lost mark costs one day's accuracy — the next
-     * summary is reported as partial — so this is quieter than the baselines,
-     * which can change what a controller sees.
+     * summary is reported as partial, so this is quiet about it.
      */
     async loadDaily() {
         if (!this.gridEnabled) return;
@@ -341,7 +283,6 @@ class EnvoyEnergyDevice {
                 this.log.info(`${this.prefix}Connected. Model: ${info.modelName}, firmware: ${info.software ?? 'unknown'}, meters: ${info.meters ? 'yes' : 'no'}`);
             }
 
-            await this.loadBaseline();
             await this.loadDaily();
 
             const readings = this.readingsByKind(await this.client.readEnergy());
@@ -401,47 +342,27 @@ class EnvoyEnergyDevice {
             this.log.info(`${this.prefix}Cannot determine grid flow — needs either a net-consumption CT or both production and consumption. Grid sensor not published.`);
         }
 
-        if (this.gridEnabled && grid && this.periodicEnergyTest) {
-            sensors.push({
-                kind: MeasurementKind.GridPeriodic,
-                displayName: `${this.gridName} Periodic`,
-                reading: readings[MeasurementKind.GridPeriodic]
-            });
-        }
-
         return sensors;
     }
 
     /**
-     * One reading per sensor kind, each offset by that sensor's own baseline.
-     *
-     * Grid import, grid export and the combined grid endpoint read the same two
-     * counters, so the offset has to be applied per sensor rather than once to
-     * the shared reading — otherwise resetting one would move the others.
+     * One reading per sensor kind. Grid import, grid export and the combined
+     * grid endpoint all read the same counters — they differ in which
+     * directions they declare, not in what they measure.
      */
     readingsByKind(reading) {
-        const raw = {
+        return {
             [MeasurementKind.Production]: reading.production,
             [MeasurementKind.Consumption]: reading.consumption,
             [MeasurementKind.Grid]: reading.grid,
             [MeasurementKind.GridImport]: reading.grid,
-            [MeasurementKind.GridExport]: reading.grid,
-            // The periodic sensor reports differences, so a baseline's constant
-            // offset cancels out of every value it publishes. It is applied
-            // anyway, uniformly with the rest, so that resetting it changes its
-            // identity the same way resetting any other sensor does.
-            [MeasurementKind.GridPeriodic]: reading.grid
+            [MeasurementKind.GridExport]: reading.grid
         };
-
-        return Object.fromEntries(
-            Object.entries(raw).map(([kind, value]) => [kind, this.baseline.apply(kind, value)])
-        );
     }
 
     /**
      * One line describing each published sensor as it stands this poll: live
-     * power, and whichever cumulative counters that sensor actually carries,
-     * after its own baseline has been applied.
+     * power, and whichever cumulative counters that sensor actually carries.
      */
     describeReadings(readings) {
         const kinds = this.publishedKinds ?? Object.keys(readings);
@@ -473,11 +394,7 @@ class EnvoyEnergyDevice {
             // Cheap when nothing changed, and the counters are only as good as
             // the last write if Homebridge stops unexpectedly.
             await this.client.saveGridEnergy();
-            await this.saveBaseline();
 
-            // Fed the gateway-side counters rather than the published ones: a
-            // baseline capture offsets those by a constant, which would land in
-            // the day it happened as a spurious delta.
             this.reportDailyGrid(reading.grid);
             await this.saveDaily();
 

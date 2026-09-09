@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.14.0] - (09.09.2026)
+
+### Removed
+
+- **The baseline, generations, and `resetHistory` / `resetHistoryPerSensor`.** Cumulative energy is now published exactly as the gateway reports it, with no offset and no arithmetic in between.
+
+  They existed to stop a brand-new sensor recording its whole opening counter as one hour. That problem appears not to exist: the production and consumption sensors have published raw lifetime registers — 41 MWh and 60 MWh — for the life of this plugin, and scrolling back through the Home app's yearly view shows no opening spike for either. Meanwhile the machinery itself caused two of the worst incidents here: a generation moved `1 → 0 → 1` published raw counters in place of offset ones and drew ~50 kWh bars, and a generation suffix pushed a serial past Matter's 32-character bound so the accessory failed to register at all.
+
+  A sensor's identity is now just `<plugin>:<serial>:<kind>`. Existing sensors published under a generation change identity once, so the Home app treats them as new devices; the old ones keep their history under their previous identity until removed there.
+
+- **The periodic-energy test sensor and `periodicEnergyTest`.** The experiment ran and the answer is no: the sensor registered correctly, and the Home app never charted it. Apple reads cumulative energy only. Worth knowing, not worth shipping.
+
+### Fixed
+
+- **Four README sections were silently deleted in v1.12.0.** The edit that replaced the "energy is accumulated by the plugin" paragraph sliced from that anchor to the next one, and "Checking the numbers", "When a chart shows an impossible bar", "Periodic energy" and "Resetting, and un-resetting" all sat between them. The first two are restored and brought up to date; the other two describe features this release removes.
+
 ## [1.13.1] - (09.09.2026)
 
 ### Fixed

@@ -79,13 +79,5 @@ export const MeasurementKind = {
     // production and consumption: a fixed direction and a positive power.
     // Opt-in via `gridSplit` — see README, "The grid sensor".
     GridImport: 'gridImport',
-    GridExport: 'gridExport',
-
-    // Opt-in experiment (`periodicEnergyTest`): the same grid flow reported as
-    // *periodic* energy — how much crossed the meter since the last report —
-    // rather than as a running total a controller has to difference. Declares
-    // periodic and nothing else, so what the Home app does with it is a clean
-    // answer rather than one confounded by a cumulative counter sitting beside
-    // it. Published alongside the real grid sensor, never instead of it.
-    GridPeriodic: 'gridPeriodic'
+    GridExport: 'gridExport'
 };

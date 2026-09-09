@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.13.1] - (09.09.2026)
+
+### Fixed
+
+- **Pinning the register was not enough, because the pin is taken from the first reading.** A restart while the production CT was quiet fastened production to the microinverters' counter — 40 MWh out on the gateway this was measured on — and then *rejected the CT* when it came back at sunrise, holding the wrong register until the next restart. That is worse than the behaviour v1.13.0 set out to fix, and it would have been the state after an overnight restart.
+
+  Production energy now comes from the CT wherever one is fitted, judged by whether it has ever accumulated a lifetime (`activeCount > 0 || whLifetime > 0`) rather than by whether it is reporting at this instant. `activeCount` goes to zero overnight; that was never a reason to read a different counter. A gateway with no CT still falls through to the microinverters, so preferring the CT does not mean requiring one.
+
+  The pin stays as a backstop for the switches a selection rule cannot prevent — an entry's own total going missing and the sum of its `lines` standing in, or `/api/v1/production` replacing `/production.json`.
+
 ## [1.13.0] - (09.09.2026)
 
 ### Fixed

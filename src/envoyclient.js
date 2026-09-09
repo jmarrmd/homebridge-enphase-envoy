@@ -505,14 +505,26 @@ class EnvoyClient extends EventEmitter {
     }
 
     /**
-     * Production comes from either the production CT ("eim") or, on a gateway
-     * without CTs, the microinverters' own reports ("inverters"). The CT is the
-     * better source when it is actually installed and reporting.
+     * Production comes from the production CT ("eim") wherever one is fitted,
+     * and only otherwise from the microinverters' own reports ("inverters").
+     *
+     * The choice is deliberately sticky. These are two different lifetime
+     * registers holding two different numbers, and picking between them per
+     * reading steps a monotonic counter by the difference. `activeCount` alone
+     * is not a safe test, because it says whether the CT is reporting *now* —
+     * it goes to zero overnight, which was never a reason to start reading a
+     * different counter. A CT that has ever accumulated a lifetime is a CT that
+     * is installed, so its register stays the source whether or not it happens
+     * to be awake.
+     *
+     * Power follows the same entry, which is correct: a quiet CT reports zero
+     * watts, and zero watts is the truth at night.
      */
     parseProduction(stats) {
         const entries = Array.isArray(stats?.production) ? stats.production : [];
 
-        const eim = entries.find((entry) => entry?.type === 'eim' && (entry.activeCount ?? 0) > 0);
+        const eim = entries.find((entry) => entry?.type === 'eim'
+            && ((entry.activeCount ?? 0) > 0 || (num(entry.whLifetime) ?? 0) > 0));
         if (eim) return this.toReading(eim, 'eim');
 
         const pcu = entries.find((entry) => entry?.type === 'inverters');

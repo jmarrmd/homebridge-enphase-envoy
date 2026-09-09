@@ -200,6 +200,7 @@ class EnvoyEnergyDevice {
             gridMaxGapMs: this.gridMaxGapMs
         })
             .on('success', (message) => this.logLevel.success && this.log.success(`${this.prefix}${message}`))
+            .on('info', (message) => this.logLevel.info && this.log.info(`${this.prefix}${message}`))
             .on('warn', (message) => this.logLevel.warn && this.log.warn(`${this.prefix}${message}`))
             .on('error', (message) => this.logLevel.error && this.log.error(`${this.prefix}${message}`))
             .on('debug', (message) => this.logLevel.debug && this.log.info(`${this.prefix}debug: ${message}`));

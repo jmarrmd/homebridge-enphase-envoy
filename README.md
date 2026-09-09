@@ -104,7 +104,6 @@ Configure through the Homebridge UI, or add a platform block by hand:
 | `gridEnabled` | `true` | Publish the grid sensor — what crosses the service entrance. |
 | `gridName` | `<name> Grid` | Base name for the grid sensors. |
 | `gridSplit` | `false` | Publish grid import and export as two one-directional sensors instead of one carrying both — see [One sensor or two](#one-sensor-or-two-gridsplit). |
-| `periodicEnergyTest` | `false` | Publish an extra grid sensor reporting periodic energy instead of a running total — see [Periodic energy](#periodic-energy-periodicenergytest). |
 | `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Confirmed working — see below. |
 | `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
 | `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
@@ -197,6 +196,48 @@ An increment implying more than 25 kW is refused rather than recorded, and logge
 **Still approximate, on either path.** Direction is resolved per interval, so a poll window that swings both ways is credited entirely to whichever direction netted. Gross import and gross export each read slightly low; their difference is exact. Live power is unchanged — it still comes from the CT, so a glitch is still visible on the tile; it just can no longer reach the energy counters.
 
 Counters are persisted to `<storage>/enphaseEnvoyMatter/gridEnergy_<host>.json` and restored on start, because Matter treats cumulative energy as monotonic and a restart that reset them to zero would corrupt the Home app's history.
+
+### Checking the numbers
+
+Once a local day the plugin closes the counters out and logs what crossed the meter, so its integration can be checked against the Enphase app or a utility bill without catching the counter file at midnight:
+
+```
+Device: envoy.local Envoy, Grid on 2026-09-05: imported 29.6 kWh, exported 4.3 kWh, net 25.3 kWh.
+```
+
+Import and export are **gross** — energy that flowed each way, accumulated separately — which is the same definition the Enphase app uses for its daily Imported and Exported figures. Its "Net Imported" row is just the difference, and `net` here is the same subtraction.
+
+A day that cannot be compared fairly says so:
+
+```
+Grid on 2026-09-05: imported 18.2 kWh, exported 4.3 kWh, net 13.9 kWh (partial day, counting began mid-day; 47 min not measured).
+```
+
+`partial day` is the first day after a fresh install. `n min not measured` appears only on the integrated fallback — where grid energy is measured from the gateway's registers, they count through any gap and there is no unmeasured time to report. The open day is persisted to `<storage>/enphaseEnvoyMatter/gridDaily_<host>.json`, so a restart at 4 p.m. does not report eight hours as a day.
+
+The line is logged at info level, once a day. It needs `gridEnabled`, and nothing else.
+
+### When a chart shows an impossible bar
+
+A controller draws each hourly bar by differencing the cumulative counter, so anything that moves a counter other than real flow arrives as one enormous hour. A 50 kWh bar is 50 kW for an hour — not load, and by the time it appears the cause is a day old. Two lines catch it at the source.
+
+**At registration**, each sensor says what it opens at:
+
+```
+Envoy Grid opens at cumulativeEnergyImported 49.9 kWh, cumulativeEnergyExported 10.3 kWh. A controller that has not seen this device before has nothing to difference against, so the Home app records the opening value as a single hour of energy …
+```
+
+That opening value *is* tomorrow's first bar, and it is a one-off — every bar after it is real. Measured on an iOS 27 build, the Home app charted a 41 MWh opening value with no spike at all, so it may never show up; the line exists so that if it does, the number is in the log rather than only in the chart. Below 1 kWh it drops to debug.
+
+**While running**, a step in a published counter is reported as the power it implies:
+
+```
+Envoy Grid cumulativeEnergyImported 232.5 kWh, +232.4 kWh in 60 s (13,942 kW implied). That is not load. …
+```
+
+Anything past 25 kW implied warns, as does a counter moving further than the reported power can account for, and a counter going backwards — which Matter forbids, and which makes a controller discard readings until the total climbs past what it last saw. Ordinary movement is logged at debug with the same shape, so `log.debug` gives a per-minute series of exactly what was published.
+
+The usual causes of a step are a counter file that changed underneath the sensor, or the gateway's registers stepping — both of which the plugin now guards against directly.
 
 **Integrating is not a workaround for a missing endpoint — it is the only thing that can work.** Checked against a real gateway (IQ Gateway, firmware D8.3.5289):
 

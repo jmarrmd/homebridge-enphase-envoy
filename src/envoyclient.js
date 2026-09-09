@@ -26,6 +26,14 @@ const REQUEST_TIMEOUT = 15_000;
 /** Re-mint a JWT this many seconds before it actually expires. */
 const TOKEN_RENEW_MARGIN = 3600;
 
+/**
+ * Consecutive polls offering only the sum of an entry's lines, with no total,
+ * before that is accepted as the register to pin to. Long enough to outlast a
+ * transient omission at startup; short enough that a gateway which never sends
+ * a total publishes energy within a few minutes.
+ */
+const LINES_PIN_AFTER = 10;
+
 /** Token generation modes, mirroring the values used by the config schema. */
 export const TokenMode = {
     None: 0,        // firmware < v7 — no token
@@ -80,6 +88,8 @@ class EnvoyClient extends EventEmitter {
             [MeasurementKind.Production]: null,
             [MeasurementKind.Consumption]: null
         };
+        this.energyTotalSeen = {};
+        this.linesOnlyReads = {};
         this.warnedEnergySource = {};
 
         // Chosen during connect(): https for token firmware, http otherwise.
@@ -351,6 +361,15 @@ class EnvoyClient extends EventEmitter {
      * reports no energy rather than a different counter's, and the floor holds
      * the last value until it returns.
      *
+     * The pin is to the *physical* source ("eim", "inverters"). Within it, the
+     * entry's own total and the sum of its lines are still two numbers, so the
+     * total is locked to as soon as it has ever been seen. A reading that only
+     * offers lines does not pin anything on its own: a transient omission of
+     * the total on the first poll would otherwise fasten production to the
+     * lines sum and reject the real register for the life of the run. Only a
+     * gateway that never sends a total — after LINES_PIN_AFTER consecutive
+     * polls without one — settles on lines, and then stays there.
+     *
      * @param {string} kind one of MeasurementKind
      * @param {object|null} reading
      */
@@ -358,19 +377,42 @@ class EnvoyClient extends EventEmitter {
         if (!reading) return reading;
 
         const source = reading.energySource ?? null;
+        if (!source) return reading;
+
+        const [physical, detail] = source.split('/');
+        const fromLines = detail === 'lines';
         const pinned = this.energySource[kind];
 
         if (!pinned) {
-            if (source) this.energySource[kind] = source;
+            if (!fromLines) {
+                this.energySource[kind] = physical;
+                this.energyTotalSeen[kind] = true;
+                return reading;
+            }
+            // Lines only, and nothing pinned yet: wait for the entry's total
+            // before committing, unless this gateway evidently never sends one.
+            this.linesOnlyReads[kind] = (this.linesOnlyReads[kind] ?? 0) + 1;
+            if (this.linesOnlyReads[kind] < LINES_PIN_AFTER) return { ...reading, energyLifetime: null };
+            this.energySource[kind] = physical;
+            this.energyTotalSeen[kind] = false;
             return reading;
         }
-        if (!source || source === pinned) return reading;
 
-        if (!this.warnedEnergySource[kind]) {
-            this.warnedEnergySource[kind] = true;
-            this.emit('warn', `${kind} lifetime energy is being offered by "${source}" instead of "${pinned}", which this reading was pinned to. Those are different registers on the gateway, and taking the new one would step a counter that may never go backwards. Holding the last known value instead. If the gateway has genuinely lost "${pinned}", restart to re-pin.`);
+        if (physical !== pinned) {
+            if (!this.warnedEnergySource[kind]) {
+                this.warnedEnergySource[kind] = true;
+                this.emit('warn', `${kind} lifetime energy is being offered by "${physical}" instead of "${pinned}", which this reading was pinned to. Those are different registers on the gateway, and taking the new one would step a counter that may never go backwards. Holding the last known value instead. If the gateway has genuinely lost "${pinned}", restart to re-pin.`);
+            }
+            return { ...reading, energyLifetime: null };
         }
-        return { ...reading, energyLifetime: null };
+
+        // Same physical source. Once the entry's own total has been seen, a
+        // reading that only offers the lines sum is held rather than taken.
+        if (!fromLines) {
+            this.energyTotalSeen[kind] = true;
+            return reading;
+        }
+        return this.energyTotalSeen[kind] ? { ...reading, energyLifetime: null } : reading;
     }
 
     /**

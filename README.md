@@ -16,9 +16,10 @@ It exposes three things per gateway:
 |--------|--------------------|---------|
 | Solar Production | ElectricalSensor (0x0510), or SolarPower (0x17) — see below | live watts, lifetime energy **exported** |
 | Home Consumption | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts, lifetime energy **imported** |
-| Grid | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live signed watts, lifetime energy imported **and** exported |
+| Grid | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts **drawn from** the utility, lifetime energy imported |
+| Grid Export | ElectricalSensor (0x0510), or ElectricalMeter (0x0514) — see below | live watts **sent to** the utility, lifetime energy exported — opt-in |
 
-Set [`gridSplit`](#one-sensor-or-two-gridsplit) to publish the grid as two one-directional sensors instead — "Grid Import" and "Grid Export", each shaped like production and consumption.
+Every endpoint is one-directional, so none of them ever reports a negative power. They are named `Solar`, `Consumption`, `Grid` and `Grid Export`; rename them in the Home app if you want something else.
 
 Import and export are relative to the endpoint: the PV array *delivers* energy, the house *draws* it. That distinction is what lets a controller tell a producer from a load.
 
@@ -98,12 +99,9 @@ Configure through the Homebridge UI, or add a platform block by hand:
 | `envoyToken` | — | A JWT from [entrez.enphaseenergy.com](https://entrez.enphaseenergy.com), required for mode `2`. |
 | `envoyPasswd` | last 6 of serial | Only for firmware v5/v6, if the gateway password is non-default. |
 | `productionEnabled` | `true` | Publish the solar production sensor. |
-| `productionName` | `<name> Solar Production` | Name of the production sensor. |
 | `consumptionEnabled` | `true` | Publish the home consumption sensor. |
-| `consumptionName` | `<name> Home Consumption` | Name of the consumption sensor. |
 | `gridEnabled` | `true` | Publish the grid sensor — what crosses the service entrance. |
-| `gridName` | `<name> Grid` | Base name for the grid sensors. |
-| `gridSplit` | `false` | Publish grid import and export as two one-directional sensors instead of one carrying both — see [One sensor or two](#one-sensor-or-two-gridsplit). |
+| `gridExportSensor` | `false` | Also publish a sensor for energy sent back to the utility — see [The grid sensor](#the-grid-sensor). |
 | `energyDeviceTypes` | `false` | Publish production as `SolarPower` (0x17) and consumption as `ElectricalMeter` (0x0514) instead of plain electrical sensors. Confirmed working — see below. |
 | `refreshInterval` | `30` | Seconds between gateway reads. Minimum 5. |
 | `log.*` | — | `success`, `info`, `warn`, `error`, `debug` toggles. |
@@ -148,33 +146,24 @@ The earlier `solarPowerDeviceType` option still works and means the same thing.
 
 Neither production nor house load tells a controller what crossed your service entrance, because solar consumed on site never touches the grid. Publishing only those two is why the Home app shows a house-load *total* with no grid figure: it is handed "imported 61 kWh" for the whole house and takes that at face value, even though much of it came from the roof.
 
-The grid sensor closes that gap. By default it is **one endpoint carrying both directions**, which is the shape the Matter specification describes for a grid connection:
+The grid sensor closes that gap. It reports **what the house drew from the utility** — one direction, one counter:
 
 ```
-<name> Grid   cumulativeEnergyImported  ← drawn from the utility
-              cumulativeEnergyExported  ← sent to the utility
-              activePower               ← signed: positive drawing, negative pushing
+Grid          cumulativeEnergyImported, activePower positive drawing, 0 when exporting
+Grid Export   cumulativeEnergyExported, activePower positive pushing, 0 when importing   (opt-in)
 ```
 
-### One sensor or two (`gridSplit`)
+Export is a separate sensor, off by default (`gridExportSensor`). For most houses the interesting number is what you bought, and a second tile you did not ask for is clutter.
 
-Setting `gridSplit: true` publishes the same flow as two one-directional sensors instead:
+### Why never one endpoint carrying both
 
-```
-<name> Grid Import   cumulativeEnergyImported, activePower positive drawing, 0 when exporting
-<name> Grid Export   cumulativeEnergyExported, activePower positive pushing, 0 when importing
-```
+Until v1.15.0 the default was a single endpoint declaring both directions — the shape the Matter specification describes for a grid connection. It was never reliable in practice:
 
-Each of those is shaped exactly like the production and consumption sensors — a fixed direction, and a power that is never negative — so there is nothing left for a controller to infer. The cost is a second tile in the Home app, and a direction the controller cannot recombine.
+- **August 2026, iOS 27 beta.** The Home app read only the exported half and silently ignored import. Measured on a live gateway: 68 kWh accumulated correctly on disk against essentially nothing in Electricity Usage.
+- **September 2026.** It read both, but appeared to display their *difference* rather than gross import.
+- **Throughout.** Enormous bars in both directions kept arriving — including overnight, and including on a clean install with the counters wiped to zero and the bridge re-paired.
 
-Which one to use depends on what your controller does with the combined endpoint, and Apple's answer has moved:
-
-- **August 2026, iOS 27 beta.** The combined endpoint was written without error and no failure appeared in the log, but the Home app **read only the exported half and silently ignored import**. Measured on a live gateway: 68 kWh of import accumulated correctly on disk and climbing at ~885 W, against essentially nothing in Electricity Usage, while export tracked fine. The split was introduced in v1.4.0 for this, and became the default.
-- **September 2026.** The same combined endpoint was recording import. What it shows looks closer to *net* import — imported minus exported — than to the gross import figure the counter holds. That is the controller netting two counters it can see, not a fault in them: the counters are gross-directional, and the daily summary in the log ([below](#checking-the-numbers)) prints import, export and net side by side so you can tell which one a tile is tracking.
-
-Since the combined endpoint is the more conformant shape and the failure that motivated the split is gone, it is the default again from v1.9.0. Turn `gridSplit` on if your controller mishandles it, or if you want gross import on a tile of its own.
-
-Switching between the two changes the sensors' identities, so each shape keeps its own history in the Home app rather than one continuing the other. The counters underneath are shared and keep accumulating either way.
+Production and consumption, meanwhile, have never misbehaved. The one structural difference is that each of them declares a single direction and never publishes a negative power. So the grid sensors now do the same. That is the whole change: the direction is the endpoint's identity, not something carried in a sign for a controller to interpret.
 
 Related: a Homebridge plugin cannot set `Descriptor.TagList` on a flat endpoint, so the standard semantic tags (Commodity Tariff Flow `0x13`, Power Source `0x0F`) that would state a direction explicitly are unreachable. Splitting the endpoint is the only way to state a direction from here — the endpoint's identity carries what a tag would have said.
 

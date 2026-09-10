@@ -102,30 +102,12 @@
                             "required": false,
                             "description": "Publish a Matter electrical sensor reporting PV production."
                         },
-                        "productionName": {
-                            "title": "Solar production name",
-                            "type": "string",
-                            "required": false,
-                            "description": "Name of the production sensor. Defaults to \"<Name> Solar Production\".",
-                            "condition": {
-                                "functionBody": "return model.devices[arrayIndices].productionEnabled !== false;"
-                            }
-                        },
                         "consumptionEnabled": {
                             "title": "Publish home consumption",
                             "type": "boolean",
                             "default": true,
                             "required": false,
                             "description": "Publish a Matter electrical sensor reporting total house load. Requires consumption CTs installed on the gateway."
-                        },
-                        "consumptionName": {
-                            "title": "Home consumption name",
-                            "type": "string",
-                            "required": false,
-                            "description": "Name of the consumption sensor. Defaults to \"<Name> Home Consumption\".",
-                            "condition": {
-                                "functionBody": "return model.devices[arrayIndices].consumptionEnabled !== false;"
-                            }
                         },
                         "gridEnabled": {
                             "title": "Publish grid flow",
@@ -134,21 +116,12 @@
                             "required": false,
                             "description": "Publish a Matter electrical meter reporting what crosses the service entrance \u2014 imported from the utility and exported to it. Neither production nor house load answers this on its own, because solar consumed on site never touches the grid, so without this sensor a controller cannot work out grid use."
                         },
-                        "gridName": {
-                            "title": "Grid name",
-                            "type": "string",
-                            "required": false,
-                            "description": "Name of the grid sensor. Defaults to \"<Name> Grid\".",
-                            "condition": {
-                                "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
-                            }
-                        },
-                        "gridSplit": {
-                            "title": "Split grid into separate import and export sensors",
+                        "gridExportSensor": {
+                            "title": "Also publish a grid export sensor",
                             "type": "boolean",
                             "default": false,
                             "required": false,
-                            "description": "By default the grid is one sensor carrying both directions \u2014 the shape the Matter specification describes for a grid connection, and one tile in the Home app. Turn this on to publish it instead as two one-directional sensors, \"<Grid name> Import\" and \"<Grid name> Export\", each shaped like the production and consumption sensors. Worth trying if a controller mishandles the combined sensor: an iOS 27 beta in August 2026 read only its exported half and silently ignored import, and by September it was reading both but appeared to show their difference rather than gross import. Switching changes the sensors' identities, so each shape keeps its own history in the Home app.",
+                            "description": "The grid sensor reports what the house drew from the utility. Turn this on to publish a second sensor for what it sent back. Kept separate, and off by default, because each endpoint then declares a single direction \u2014 the same shape as the production and consumption sensors, which the Home app has always handled correctly. An endpoint carrying both directions is legal Matter and was the default until v1.15.0, but what a controller does with the second direction has not been reliable here.",
                             "condition": {
                                 "functionBody": "return model.devices[arrayIndices].gridEnabled !== false;"
                             }
@@ -238,12 +211,9 @@
                     "expanded": false,
                     "items": [
                         "devices[].productionEnabled",
-                        "devices[].productionName",
                         "devices[].consumptionEnabled",
-                        "devices[].consumptionName",
                         "devices[].gridEnabled",
-                        "devices[].gridName",
-                        "devices[].gridSplit",
+                        "devices[].gridExportSensor",
                         "devices[].energyDeviceTypes",
                         "devices[].refreshInterval"
                     ]

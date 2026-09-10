@@ -70,7 +70,6 @@ const ENERGY_DEVICE_TYPES = {
     [MeasurementKind.Production]: { module: 'solar-power', exportName: 'SolarPowerDevice' },
     [MeasurementKind.Consumption]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
     [MeasurementKind.Grid]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
-    [MeasurementKind.GridImport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' },
     [MeasurementKind.GridExport]: { module: 'electrical-meter', exportName: 'ElectricalMeterDevice' }
 };
 
@@ -168,16 +167,17 @@ const cumulative = (wattHours, at) => ({ energy: milli(wattHours) ?? 0, endTimes
 /**
  * Active power for one sensor.
  *
- * Grid power is signed: positive drawing from the utility, negative pushing
- * back. A split grid endpoint reports only its own direction and zero when
- * flow is the other way, so it reads exactly like production and consumption
- * do — a positive number whose direction is fixed by the endpoint rather than
- * carried in the sign. The combined endpoint keeps the signed value.
+ * The gateway reports grid flow as one signed number: positive drawing from
+ * the utility, negative pushing back. Each grid endpoint reports only its own
+ * direction, and zero when flow is the other way, so it reads exactly like
+ * production and consumption do — a positive number whose direction is fixed
+ * by the endpoint rather than carried in the sign. Nothing published by this
+ * plugin is ever a negative power.
  */
 const powerFor = (kind, reading) => {
     const power = reading?.power;
     if (typeof power !== 'number' || !Number.isFinite(power)) return power;
-    if (kind === MeasurementKind.GridImport) return Math.max(0, power);
+    if (kind === MeasurementKind.Grid) return Math.max(0, power);
     if (kind === MeasurementKind.GridExport) return Math.max(0, -power);
     return power;
 };
@@ -369,12 +369,6 @@ class MatterEnergyBridge {
         const at = nowEpochS();
 
         if (kind === MeasurementKind.Grid) {
-            return {
-                cumulativeEnergyImported: cumulative(reading?.energyImported, at),
-                cumulativeEnergyExported: cumulative(reading?.energyExported, at)
-            };
-        }
-        if (kind === MeasurementKind.GridImport) {
             return { cumulativeEnergyImported: cumulative(reading?.energyImported, at) };
         }
         if (kind === MeasurementKind.GridExport) {

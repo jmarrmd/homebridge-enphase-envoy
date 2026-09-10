@@ -47,6 +47,19 @@ const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
 const localDay = (at) => new Date(at).toLocaleDateString('en-CA');
 
 /**
+ * How far the gateway's own lifetime registers moved over a window, and what
+ * that implies the grid saw. Null when either end is unknown — the first day
+ * after a start has nothing to difference against.
+ */
+const registerDelta = (from, to) => {
+    if (!from || !to) return null;
+    const production = to.production - from.production;
+    const consumption = to.consumption - from.consumption;
+    if (!isNumber(production) || !isNumber(consumption)) return null;
+    return { production, consumption, net: consumption - production };
+};
+
+/**
  * How stale the "last sampled at" mark may get on disk.
  *
  * It is only written when the file is being written anyway, so an unclean
@@ -96,6 +109,7 @@ class DailyEnergy {
             day: mark.day,
             imported: mark.imported,
             exported: mark.exported,
+            registers: mark.registers ?? null,
             at: isNumber(mark.at) ? mark.at : Date.now(),
             seenAt: isNumber(mark.seenAt) ? mark.seenAt : null,
             gapMs: isNumber(mark.gapMs) ? mark.gapMs : 0,
@@ -151,7 +165,14 @@ class DailyEnergy {
             imported: totals.imported - this.mark.imported,
             exported: totals.exported - this.mark.exported,
             whole: this.mark.whole,
-            gapMs: this.mark.gapMs
+            gapMs: this.mark.gapMs,
+            // What the gateway's own registers did over the same window. The
+            // counters are derived from these, so the two must agree: the day's
+            // net must equal the change in (consumption - production), and
+            // neither counter can exceed what the registers moved. When they
+            // disagree, the attribution is inventing flow that never crossed
+            // the meter, and this line is where that shows up.
+            registers: registerDelta(this.mark.registers, totals.registers)
         };
 
         // The new day begins where this one ended, so nothing falls between
@@ -165,6 +186,7 @@ class DailyEnergy {
             day,
             imported: totals.imported,
             exported: totals.exported,
+            registers: totals.registers ?? null,
             at: now,
             seenAt: now,
             gapMs: 0,

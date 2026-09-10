@@ -65,19 +65,38 @@ export const PartNumbers = {
     '800-02403-r08': 'IQ Combiner C6'
 };
 
+/**
+ * What each sensor is called in the controller.
+ *
+ * Short and bare on purpose. Homebridge re-asserts an accessory's node label
+ * every time it starts, so a controller may overwrite a name the user chose —
+ * which makes a long, prefixed default worse than a short one, because the
+ * thing it keeps reverting to is uglier. Rename in the Home app; this is only
+ * where each sensor starts. Two gateways on one bridge would share these names
+ * until renamed there, which is the trade for not carrying a prefix nobody
+ * wanted on a single-gateway install.
+ */
+export const SensorNames = {
+    production: 'Solar',
+    consumption: 'Consumption',
+    grid: 'Grid',
+    gridExport: 'Grid Export'
+};
+
 /** Identifies the Matter sensors this plugin publishes. */
 export const MeasurementKind = {
     Production: 'production',
     Consumption: 'consumption',
 
-    // One endpoint carrying both grid directions, and the default shape: it is
-    // what the Matter spec describes for a grid connection, and it is one tile
-    // in the Home app rather than two.
+    // What the house draws from the utility. One direction only, so it is
+    // shaped exactly like production and consumption — a fixed direction and a
+    // power that is never negative — which is the shape the Home app has always
+    // handled correctly. An endpoint declaring both directions is legal Matter
+    // and was the default until v1.15.0, but what a controller does with the
+    // second direction has never been reliable here.
     Grid: 'grid',
 
-    // The same grid flow as two one-directional endpoints, each shaped like
-    // production and consumption: a fixed direction and a positive power.
-    // Opt-in via `gridSplit` — see README, "The grid sensor".
-    GridImport: 'gridImport',
+    // What the house sends back. Opt-in (`gridExportSensor`), because most of
+    // the time the interesting number is what you bought.
     GridExport: 'gridExport'
 };

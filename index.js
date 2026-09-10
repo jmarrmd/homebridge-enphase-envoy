@@ -17,7 +17,7 @@ import { mkdirSync } from 'fs';
 import EnvoyClient, { TokenMode } from './src/envoyclient.js';
 import DailyEnergy from './src/dailyenergy.js';
 import MatterEnergyBridge from './src/matterenergy.js';
-import { PluginName, PlatformName, StorageDir, MeasurementKind } from './src/constants.js';
+import { PluginName, PlatformName, StorageDir, MeasurementKind, SensorNames } from './src/constants.js';
 
 const DEFAULT_REFRESH_SECONDS = 30;
 const MIN_REFRESH_SECONDS = 5;
@@ -148,16 +148,17 @@ class EnvoyEnergyDevice {
         this.productionEnabled = config.productionEnabled ?? true;
         this.consumptionEnabled = config.consumptionEnabled ?? true;
         this.gridEnabled = config.gridEnabled ?? true;
-        this.productionName = config.productionName || `${name} Solar Production`;
-        this.consumptionName = config.consumptionName || `${name} Home Consumption`;
-        this.gridName = config.gridName || `${name} Grid`;
+        // Fixed, and deliberately bare. Homebridge re-asserts each accessory's
+        // node label on every start, so a controller may reset a name the user
+        // chose — which makes a long default actively worse than a short one.
+        // Rename in the Home app; the plugin's name is only the starting point.
 
-        // One endpoint carrying both directions is the default: it is the shape
-        // the Matter spec describes for a grid connection, and it is one tile in
-        // the Home app rather than two. Splitting it into two one-directional
-        // endpoints is the fallback for a controller that mishandles the pair —
-        // see README, "The grid sensor".
-        this.gridSplit = config.gridSplit ?? false;
+        // The grid sensor reports what the house drew from the utility, and
+        // nothing else. Export is a separate, opt-in sensor: it is the smaller
+        // number for most houses, and keeping each endpoint one-directional is
+        // what makes them read like production and consumption, which the Home
+        // app has never mishandled.
+        this.gridExportSensor = config.gridExportSensor ?? false;
 
         // Integrating across a long outage would invent energy that was never
         // measured, so anything beyond a few missed polls is treated as a gap —
@@ -228,9 +229,16 @@ class EnvoyEnergyDevice {
      * integrate across, under-reports and should not be compared as if it were
      * whole.
      */
-    reportDailyGrid(grid) {
+    reportDailyGrid(grid, reading) {
         const closed = this.daily.sample(
-            { imported: grid?.energyImported, exported: grid?.energyExported },
+            {
+                imported: grid?.energyImported,
+                exported: grid?.energyExported,
+                registers: {
+                    production: reading?.production?.energyLifetime,
+                    consumption: reading?.consumption?.energyLifetime
+                }
+            },
             Date.now(),
             { spansGaps: this.client.gridEnergy?.source === 'measured' }
         );
@@ -243,6 +251,22 @@ class EnvoyEnergyDevice {
         const net = closed.imported - closed.exported;
         const suffix = caveats.length > 0 ? ` (${caveats.join('; ')})` : '';
         this.log.info(`${this.prefix}Grid on ${closed.day}: imported ${kwh(closed.imported)}, exported ${kwh(closed.exported)}, net ${kwh(net)}${suffix}.`);
+
+        // The counters are derived from these two registers, so the two
+        // accounts must agree. A day's net has to equal the change in
+        // consumption minus production, and neither counter can be larger than
+        // the registers moved. Printing both is what makes a disagreement
+        // visible in one line instead of a week of charts.
+        const r = closed.registers;
+        if (!r) return;
+
+        const drift = net - r.net;
+        const inflated = closed.imported + closed.exported > Math.abs(r.net) * 2 + 1000;
+        this.log.info(`${this.prefix}  gateway registers moved: production ${kwh(r.production)}, consumption ${kwh(r.consumption)}, so the grid saw net ${kwh(r.net)}.${
+            Math.abs(drift) > 500 ? ` Net disagrees by ${kwh(drift)} — the counters and the registers are not telling the same story.` : ''
+        }${
+            inflated ? ` Import and export together (${kwh(closed.imported + closed.exported)}) far exceed the net the registers moved, which is the signature of flow being attributed in both directions that never crossed the meter.` : ''
+        }`);
     }
 
     /** Persist the open day. Warn once if that keeps failing. */
@@ -319,25 +343,25 @@ class EnvoyEnergyDevice {
         const sensors = [];
         const production = readings[MeasurementKind.Production];
         const consumption = readings[MeasurementKind.Consumption];
-        const grid = readings[MeasurementKind.GridImport] ?? readings[MeasurementKind.Grid];
+        const grid = readings[MeasurementKind.Grid];
 
         if (this.productionEnabled && production) {
-            sensors.push({ kind: MeasurementKind.Production, displayName: this.productionName, reading: production });
+            sensors.push({ kind: MeasurementKind.Production, displayName: SensorNames[MeasurementKind.Production], reading: production });
         } else if (this.productionEnabled && this.logLevel.warn) {
             this.log.warn(`${this.prefix}Gateway reports no production data — production sensor not published.`);
         }
 
         if (this.consumptionEnabled && consumption) {
-            sensors.push({ kind: MeasurementKind.Consumption, displayName: this.consumptionName, reading: consumption });
+            sensors.push({ kind: MeasurementKind.Consumption, displayName: SensorNames[MeasurementKind.Consumption], reading: consumption });
         } else if (this.consumptionEnabled && this.logLevel.info) {
             this.log.info(`${this.prefix}Gateway reports no consumption data (no consumption CTs installed) — consumption sensor not published.`);
         }
 
-        if (this.gridEnabled && grid && this.gridSplit) {
-            sensors.push({ kind: MeasurementKind.GridImport, displayName: `${this.gridName} Import`, reading: readings[MeasurementKind.GridImport] });
-            sensors.push({ kind: MeasurementKind.GridExport, displayName: `${this.gridName} Export`, reading: readings[MeasurementKind.GridExport] });
-        } else if (this.gridEnabled && grid) {
-            sensors.push({ kind: MeasurementKind.Grid, displayName: this.gridName, reading: readings[MeasurementKind.Grid] });
+        if (this.gridEnabled && grid) {
+            sensors.push({ kind: MeasurementKind.Grid, displayName: SensorNames[MeasurementKind.Grid], reading: grid });
+            if (this.gridExportSensor) {
+                sensors.push({ kind: MeasurementKind.GridExport, displayName: SensorNames[MeasurementKind.GridExport], reading: readings[MeasurementKind.GridExport] });
+            }
         } else if (this.gridEnabled && this.logLevel.info) {
             this.log.info(`${this.prefix}Cannot determine grid flow — needs either a net-consumption CT or both production and consumption. Grid sensor not published.`);
         }
@@ -355,7 +379,6 @@ class EnvoyEnergyDevice {
             [MeasurementKind.Production]: reading.production,
             [MeasurementKind.Consumption]: reading.consumption,
             [MeasurementKind.Grid]: reading.grid,
-            [MeasurementKind.GridImport]: reading.grid,
             [MeasurementKind.GridExport]: reading.grid
         };
     }
@@ -395,7 +418,7 @@ class EnvoyEnergyDevice {
             // the last write if Homebridge stops unexpectedly.
             await this.client.saveGridEnergy();
 
-            this.reportDailyGrid(reading.grid);
+            this.reportDailyGrid(reading.grid, reading);
             await this.saveDaily();
 
             if (this.logLevel.debug) {

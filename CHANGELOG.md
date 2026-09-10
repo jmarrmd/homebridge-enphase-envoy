@@ -12,6 +12,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.15.0] - (10.09.2026)
+
+### Changed
+
+- **The grid sensor reports import only. Export is a separate, opt-in sensor.** No endpoint this plugin publishes declares two directions any more, and none of them ever reports a negative power.
+
+  The two-directional endpoint was the default until now, and it was never reliable: an August 2026 iOS 27 build read only its exported half and ignored 68 kWh of import; by September it read both but appeared to display their difference; and enormous bars in *both* directions kept arriving, overnight included, on a clean install with the counters wiped to zero and the bridge re-paired. Production and consumption have never misbehaved through any of it, and the one structural difference is that each declares a single direction. So the grid sensors now match them. Turn on `gridExportSensor` for the other half.
+
+- **Sensor names are fixed and bare: `Solar`, `Consumption`, `Grid`, `Grid Export`.** The `productionName` / `consumptionName` / `gridName` options are removed.
+
+  Homebridge re-asserts each accessory's node label every time it starts, so a controller can overwrite a name the user chose and revert to the plugin's. A configurable long default made that worse, not better — the thing it kept reverting to was longer. Rename in the Home app; this is only where each sensor starts. (Two gateways on one bridge share these names until renamed there. That is the trade for not carrying a prefix nobody wanted on a single-gateway install.)
+
+- `gridSplit` is removed, superseded by the above.
+
+### Added
+
+- **The daily summary now reports the registers the counters were derived from**, and that line is the diagnostic of record for the grid sensor:
+
+  ```
+  Grid on 2026-09-09: imported 60.0 kWh, exported 40.0 kWh, net 20.0 kWh.
+    gateway registers moved: production 0.0 kWh, consumption 20.0 kWh, so the grid saw net 20.0 kWh. Import and export together (100.0 kWh) far exceed the net the registers moved, which is the signature of flow being attributed in both directions that never crossed the meter.
+  ```
+
+  The counters are `consumption - production`, differenced per poll and split by sign, so the two accounts must agree: the day's net must equal the change in the registers, and neither counter can exceed what they moved. When both counters inflate while net stays right, the attribution is manufacturing flow — which is invisible in the counters alone, and obvious the moment both are printed. One line, once a day, no debug logging required.
+
 ## [1.14.1] - (09.09.2026)
 
 ### Fixed

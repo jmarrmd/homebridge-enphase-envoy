@@ -110,11 +110,11 @@
                             "description": "Publish a Matter electrical sensor reporting total house load. Requires consumption CTs installed on the gateway."
                         },
                         "gridEnabled": {
-                            "title": "Publish grid flow",
+                            "title": "Publish grid import",
                             "type": "boolean",
                             "default": true,
                             "required": false,
-                            "description": "Publish a Matter electrical meter reporting what crosses the service entrance \u2014 imported from the utility and exported to it. Neither production nor house load answers this on its own, because solar consumed on site never touches the grid, so without this sensor a controller cannot work out grid use."
+                            "description": "Publish a Matter electrical meter reporting what the house draws from the utility. Import only \u2014 energy sent back is a separate, opt-in sensor below. Neither production nor house load answers this on its own, because solar consumed on site never touches the grid, so without this sensor a controller cannot work out grid use."
                         },
                         "gridExportSensor": {
                             "title": "Also publish a grid export sensor",

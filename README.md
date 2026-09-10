@@ -127,7 +127,7 @@ Setting `"energyDeviceTypes": true` publishes each sensor with the application-c
 |---|---|---|
 | Production | `SolarPower` (0x17) | The spec's PV array type. Declares no clusters of its own — it is a semantic tag. |
 | Consumption | `ElectricalMeter` (0x0514) | "Meters the electrical energy being imported and/or exported." Its mandatory clusters are exactly the two this plugin declares. |
-| Grid | `ElectricalMeter` (0x0514) | The same type, which describes a grid connection more exactly than it does house load. One endpoint declaring both directions, or two declaring one each — see [One sensor or two](#one-sensor-or-two-gridsplit). |
+| Grid / Grid Export | `ElectricalMeter` (0x0514) | The same type, which describes a grid connection more exactly than it does house load. One endpoint per direction — see [The grid sensor](#the-grid-sensor). |
 
 Not `ElectricalUtilityMeter` (0x0511): despite the name it models the utility *account* — its mandatory cluster is `MeterIdentification`, not measurement — so it describes the revenue meter at the service entrance, not house load.
 

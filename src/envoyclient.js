@@ -27,12 +27,20 @@ const REQUEST_TIMEOUT = 15_000;
 const TOKEN_RENEW_MARGIN = 3600;
 
 /**
- * Consecutive polls offering only the sum of an entry's lines, with no total,
- * before that is accepted as the register to pin to. Long enough to outlast a
- * transient omission at startup; short enough that a gateway which never sends
- * a total publishes energy within a few minutes.
+ * Polls offering only a provisional register — the sum of an entry's lines, or
+ * the `/api/v1/production` stand-in — before that is accepted as the register
+ * to pin to. Long enough to outlast a transient omission or a missed request at
+ * startup; short enough that a gateway which genuinely only offers one of these
+ * publishes energy within a few minutes.
  */
-const LINES_PIN_AFTER = 10;
+const PROVISIONAL_PIN_AFTER = 10;
+
+/**
+ * The energy source name for `/api/v1/production`. It stands in for
+ * `/production.json` when that request fails, so it is never pinned to while
+ * the real one may still answer — see pinEnergySource().
+ */
+const FALLBACK_SOURCE = 'fallback';
 
 /** Token generation modes, mirroring the values used by the config schema. */
 export const TokenMode = {
@@ -89,7 +97,7 @@ class EnvoyClient extends EventEmitter {
             [MeasurementKind.Consumption]: null
         };
         this.energyTotalSeen = {};
-        this.linesOnlyReads = {};
+        this.provisionalReads = {};
         this.warnedEnergySource = {};
 
         // Chosen during connect(): https for token firmware, http otherwise.
@@ -363,12 +371,16 @@ class EnvoyClient extends EventEmitter {
      *
      * The pin is to the *physical* source ("eim", "inverters"). Within it, the
      * entry's own total and the sum of its lines are still two numbers, so the
-     * total is locked to as soon as it has ever been seen. A reading that only
-     * offers lines does not pin anything on its own: a transient omission of
-     * the total on the first poll would otherwise fasten production to the
-     * lines sum and reject the real register for the life of the run. Only a
-     * gateway that never sends a total — after LINES_PIN_AFTER consecutive
-     * polls without one — settles on lines, and then stays there.
+     * total is locked to as soon as it has ever been seen.
+     *
+     * Two sources are provisional and never pin on their own: a reading that
+     * only offers lines, and the `/api/v1/production` stand-in. Either can turn
+     * up for one poll on a gateway that normally offers the real register — a
+     * total omitted, a `/production.json` request that failed — and pinning to
+     * it would reject the real register for the life of the run. That is what
+     * froze Solar after a restart whose first request missed. Only a gateway
+     * that offers nothing better for PROVISIONAL_PIN_AFTER polls settles on
+     * one, and then stays there.
      *
      * @param {string} kind one of MeasurementKind
      * @param {object|null} reading
@@ -381,25 +393,28 @@ class EnvoyClient extends EventEmitter {
 
         const [physical, detail] = source.split('/');
         const fromLines = detail === 'lines';
+        const standIn = physical === FALLBACK_SOURCE;
         const pinned = this.energySource[kind];
 
         if (!pinned) {
-            if (!fromLines) {
+            if (!fromLines && !standIn) {
                 this.energySource[kind] = physical;
                 this.energyTotalSeen[kind] = true;
                 return reading;
             }
-            // Lines only, and nothing pinned yet: wait for the entry's total
-            // before committing, unless this gateway evidently never sends one.
-            this.linesOnlyReads[kind] = (this.linesOnlyReads[kind] ?? 0) + 1;
-            if (this.linesOnlyReads[kind] < LINES_PIN_AFTER) return { ...reading, energyLifetime: null };
+            // Provisional, and nothing pinned yet: wait for the real register
+            // before committing, unless this gateway evidently never offers one.
+            this.provisionalReads[kind] = (this.provisionalReads[kind] ?? 0) + 1;
+            if (this.provisionalReads[kind] < PROVISIONAL_PIN_AFTER) return { ...reading, energyLifetime: null };
             this.energySource[kind] = physical;
-            this.energyTotalSeen[kind] = false;
+            this.energyTotalSeen[kind] = !fromLines;
             return reading;
         }
 
         if (physical !== pinned) {
-            if (!this.warnedEnergySource[kind]) {
+            // The stand-in turns up whenever /production.json misses a poll.
+            // Holding through that is routine, so it is not worth a warning.
+            if (!standIn && !this.warnedEnergySource[kind]) {
                 this.warnedEnergySource[kind] = true;
                 this.emit('warn', `${kind} lifetime energy is being offered by "${physical}" instead of "${pinned}", which this reading was pinned to. Those are different registers on the gateway, and taking the new one would step a counter that may never go backwards. Holding the last known value instead. If the gateway has genuinely lost "${pinned}", restart to re-pin.`);
             }
@@ -418,9 +433,12 @@ class EnvoyClient extends EventEmitter {
     /**
      * Read current production and consumption.
      *
-     * @returns {Promise<{production: object|null, consumption: object|null}>}
+     * @returns {Promise<{production: object|null, consumption: object|null, grid: object|null, statsRead: boolean}>}
      *          Each reading is `{ power, energyLifetime, voltage, current }` in
      *          W / Wh / V / A, or null when the gateway does not report it.
+     *          `statsRead` says whether `/production.json` answered this poll —
+     *          when it did not, consumption and grid are unknown rather than
+     *          absent, which is a difference the caller has to respect.
      */
     async readEnergy() {
         let stats = null;
@@ -429,26 +447,34 @@ class EnvoyClient extends EventEmitter {
         } catch (error) {
             this.emit('debug', `${ApiUrls.SystemReadingStats} unavailable (${error.message ?? error}), falling back`);
         }
+        const statsRead = stats !== null && typeof stats === 'object';
+        if (!statsRead) stats = null;
 
-        // Floored before the grid sees them. Grid energy is now the *difference*
+        const production = this.pinEnergySource(MeasurementKind.Production, this.parseProduction(stats) ?? await this.readProductionFallback());
+        const consumption = this.pinEnergySource(MeasurementKind.Consumption, this.parseConsumption(stats, production));
+
+        // Whether both registers were actually read on this poll, from the
+        // registers they are pinned to. The floor below holds a missing one at
+        // its last value, which is right for publishing it but wrong for the
+        // grid: a held production next to a live consumption reads as the
+        // house drawing everything from the utility.
+        const fresh = isNumber(production?.energyLifetime) && isNumber(consumption?.energyLifetime);
+
+        // Floored before the grid sees them. Grid energy is the *difference*
         // between these two registers, so a momentary dip in either would read
         // as flow that never happened — credited to one direction on the dip and
         // to the other on the recovery, inflating both counters permanently.
         // The high-water mark holds them monotonic, which is exactly what makes
         // the difference trustworthy.
-        const production = this.applyEnergyFloor(
-            MeasurementKind.Production,
-            this.pinEnergySource(MeasurementKind.Production, this.parseProduction(stats) ?? await this.readProductionFallback())
-        );
-        const consumption = this.applyEnergyFloor(
-            MeasurementKind.Consumption,
-            this.pinEnergySource(MeasurementKind.Consumption, this.parseConsumption(stats, production))
-        );
+        const floored = {
+            production: this.applyEnergyFloor(MeasurementKind.Production, production),
+            consumption: this.applyEnergyFloor(MeasurementKind.Consumption, consumption)
+        };
 
         return {
-            production,
-            consumption,
-            grid: this.readGrid(stats, production, consumption)
+            ...floored,
+            grid: this.readGrid(stats, floored.production, floored.consumption, fresh),
+            statsRead
         };
     }
 
@@ -475,9 +501,17 @@ class EnvoyClient extends EventEmitter {
      * gateway's own signed net register, so there is nothing to gain and the
      * integrated path is used instead.
      *
+     * On the measured path a poll is only sampled when both registers were
+     * read fresh. Anything else — a held value, a failed request — is skipped
+     * outright, not estimated: the registers keep counting through the gap, so
+     * the next fresh poll carries all of it, in the right direction. Sampling a
+     * held register instead credited phantom import that the plausibility
+     * guard then refused to take back.
+     *
+     * @param {boolean} fresh both registers were read this poll
      * @returns {object|null} `{ power, energyImported, energyExported, voltage }`
      */
-    readGrid(stats, production, consumption) {
+    readGrid(stats, production, consumption, fresh) {
         if (!this.gridEnergy) return null;
 
         const entries = Array.isArray(stats?.consumption) ? stats.consumption : [];
@@ -488,13 +522,20 @@ class EnvoyClient extends EventEmitter {
             ? measured.power
             : this.subtractOrNull(consumption?.power, production?.power);
 
-        const netEnergy = this.consumptionMeasured
-            ? this.subtractOrNull(consumption?.energyLifetime, production?.energyLifetime)
-            : null;
+        let sampled = false;
+        if (this.consumptionMeasured === true) {
+            if (fresh) {
+                this.gridEnergy.sample({ netEnergy: consumption.energyLifetime - production.energyLifetime });
+                sampled = true;
+            }
+        } else if (this.consumptionMeasured === false) {
+            this.gridEnergy.sample({ power });
+            sampled = isNumber(power);
+        }
 
-        if (!isNumber(power) && !isNumber(netEnergy)) return null;
+        if (!sampled && !isNumber(power)) return null;
 
-        const { imported, exported } = this.gridEnergy.sample({ netEnergy, power });
+        const { imported, exported } = this.gridEnergy.totals();
         this.reportGridSource();
 
         return {
@@ -579,6 +620,10 @@ class EnvoyClient extends EventEmitter {
      * crosses the meter), so reconstruct the house load as production + net.
      */
     parseConsumption(stats, production) {
+        // No answer is not the same as no consumption CT. Leave what is known
+        // about the gateway alone until it says something.
+        if (!stats) return null;
+
         const entries = Array.isArray(stats?.consumption) ? stats.consumption : [];
 
         const total = entries.find((entry) => entry?.measurementType === 'total-consumption');
@@ -615,7 +660,7 @@ class EnvoyClient extends EventEmitter {
             return {
                 power: data.wattsNow,
                 energyLifetime: num(data.wattHoursLifetime),
-                energySource: 'api/v1',
+                energySource: FALLBACK_SOURCE,
                 voltage: null,
                 current: null
             };

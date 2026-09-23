@@ -2,7 +2,7 @@
     "private": false,
     "displayName": "Enphase Envoy Matter",
     "name": "homebridge-enphase-envoy-matter",
-    "version": "1.15.0",
+    "version": "1.16.0",
     "description": "Homebridge plugin publishing Enphase Envoy solar production and home consumption as Matter energy sensors for the Apple Home Energy view.",
     "license": "MIT",
     "author": "grzegorz914",
@@ -53,6 +53,6 @@
         "url": "https://buycoffee.to/grzegorz914"
     },
     "scripts": {
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "test": "node --test test/*.test.js"
     }
 }

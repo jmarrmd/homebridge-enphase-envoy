@@ -240,7 +240,7 @@ The plugin reads `/production.json?details=1`, which returns production and cons
 
 - **Production** comes from the production CT (`eim`) when one is installed and reporting, otherwise from the microinverters' own reports (`inverters`).
 - **Consumption** comes from the `total-consumption` CT. On a gateway wired for net metering only, house load is reconstructed as `production + net-consumption`.
-- If `/production.json` is unavailable the plugin falls back to `/api/v1/production`, which reports production only.
+- If `/production.json` is unavailable the plugin falls back to `/api/v1/production`, which reports production only. At startup it waits for `/production.json` first, so one missed request does not leave Consumption and Grid unpublished.
 
 Lifetime energy counters are held at their high-water mark, since Matter treats cumulative energy as monotonic and a momentary dip in a gateway reading would otherwise surface as a bogus spike in the Home app.
 

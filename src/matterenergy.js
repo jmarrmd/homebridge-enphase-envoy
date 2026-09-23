@@ -24,12 +24,13 @@
  * -------
  *   Solar production   -> activePower + cumulativeEnergyExported
  *   Home consumption   -> activePower + cumulativeEnergyImported
- *   Grid               -> activePower + both cumulative directions
+ *   Grid               -> activePower + cumulativeEnergyImported
+ *   Grid export        -> activePower + cumulativeEnergyExported (opt-in)
  *
  * Import vs. export is relative to the endpoint: the PV array *delivers*
- * energy, the house *draws* it. The grid sensor is the only one that does both,
- * and it is what lets a controller work out grid use — neither production nor
- * house load alone says what crossed the service entrance.
+ * energy, the house *draws* it. Every endpoint carries one direction only —
+ * grid flow is split across two endpoints rather than declared both ways on
+ * one, which the Home app never handled reliably.
  *
  * Matter expresses all electrical measurements in milli-units, hence the x1000
  * conversions. Homebridge fills in the mandatory cluster attributes it can
@@ -146,6 +147,28 @@ const labelFor = (value) => (value.length <= MAX_IDENTITY ? value : value.slice(
 /** Matter uses milli-units for electrical measurements. */
 const milli = (value) => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) : null);
 
+/** The reading field that carries each sensor's cumulative energy. */
+const ENERGY_FIELD = {
+    [MeasurementKind.Production]: 'energyLifetime',
+    [MeasurementKind.Consumption]: 'energyLifetime',
+    [MeasurementKind.Grid]: 'energyImported',
+    [MeasurementKind.GridExport]: 'energyExported'
+};
+
+/**
+ * Whether a reading carries a known cumulative total for this sensor.
+ *
+ * An unknown total must not be published as zero. A controller differences
+ * each total against the one before it, so a zero followed by the real value
+ * is charted as the sensor's entire lifetime in a single hour — tens of MWh of
+ * solar in one bar. Registration waits for a known total, and an update
+ * without one sends power only.
+ */
+export const hasEnergy = (kind, reading) => {
+    const value = reading?.[ENERGY_FIELD[kind]];
+    return typeof value === 'number' && Number.isFinite(value);
+};
+
 /**
  * Unix epoch seconds. matter.js's TlvEpochS accepts Unix time and converts to
  * the Matter epoch (2000-01-01) itself, so do not offset it here.
@@ -251,8 +274,9 @@ const kwh = (milliWattHours) => `${(milliWattHours / 1_000_000).toFixed(1)} kWh`
 
 /**
  * The power that should account for movement in one energy attribute. Imported
- * energy is answered for by power flowing in, exported by power flowing out —
- * on the combined grid endpoint those are the two signs of one number.
+ * energy is answered for by power flowing in, exported by power flowing out.
+ * The power passed in is already the endpoint's own (see powerFor), so this
+ * only has to pick the matching sign.
  */
 const directionalPower = (field, power) => {
     if (!Number.isFinite(power)) return null;
@@ -356,14 +380,9 @@ class MatterEnergyBridge {
      * feature-gated ElectricalEnergyMeasurement features from exactly this, at
      * registration, so whatever a sensor declares here is all it can ever report.
      *
-     * The combined grid endpoint declares both directions, which is the shape
-     * the Matter spec describes for a grid connection. What a controller then
-     * makes of it has moved: an iOS 27 beta in August 2026 read only the
-     * exported half and silently ignored 68 kWh of import, which is why
-     * `gridSplit` exists; by September it was reading both, though it appears
-     * to show their difference rather than gross import. `gridSplit` publishes
-     * the same flow as two one-directional endpoints instead, leaving the
-     * controller nothing to infer.
+     * Exactly one direction per sensor. A grid endpoint declaring both was the
+     * default until v1.15.0 and no controller build handled it reliably, so
+     * import and export are now separate endpoints.
      */
     energyFor(kind, reading) {
         const at = nowEpochS();
@@ -494,7 +513,7 @@ class MatterEnergyBridge {
             return;
         }
 
-        this.log.info(`${this.prefix}${accessory.displayName} opens at ${summary}. A controller that has not seen this device before has nothing to difference against, so the Home app records the opening value as a single hour of energy — one tall bar, which then sets the chart's axis. It is a one-off, and the bars after it are real. It is a one-off, and every bar after it is real.`);
+        this.log.info(`${this.prefix}${accessory.displayName} opens at ${summary}. A controller that has not seen this device before has nothing to difference against, so the Home app records the opening value as a single hour of energy — one tall bar, which then sets the chart's axis. It is a one-off, and every bar after it is real.`);
     }
 
     /**
@@ -555,7 +574,8 @@ class MatterEnergyBridge {
 
     /**
      * Push a fresh reading to one registered sensor. Power goes out on every
-     * call; cumulative energy is rate-limited and only sent when it changed.
+     * call; cumulative energy is rate-limited, only sent when it changed, and
+     * never sent at all when this reading does not know it (see hasEnergy).
      *
      * @param {string} kind one of MeasurementKind
      * @param {object|null} reading normalized reading from EnvoyClient
@@ -574,7 +594,7 @@ class MatterEnergyBridge {
         const due = now - sensor.lastEnergyAt >= ENERGY_UPDATE_INTERVAL;
         const heartbeat = now - sensor.lastEnergyAt >= ENERGY_HEARTBEAT_INTERVAL;
 
-        if ((changed && due) || heartbeat) {
+        if (hasEnergy(sensor.kind, reading) && ((changed && due) || heartbeat)) {
             sensor.lastEnergy = energy;
             sensor.lastEnergyAt = now;
             this.reportEnergyStep(sensor, clusters.electricalEnergyMeasurement, now, powerFor(sensor.kind, reading));

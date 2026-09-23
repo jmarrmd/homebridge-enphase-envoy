@@ -175,8 +175,11 @@ class GridEnergy {
      * @param {object} reading
      * @param {number|null} reading.netEnergy signed Wh across the service
      *        entrance, from the gateway's registers: positive means the house
-     *        has drawn more than the array produced. Null where unavailable,
-     *        which selects the integrated path.
+     *        has drawn more than the array produced. Null selects the
+     *        integrated path — which is the caller's decision, not a fallback:
+     *        a gateway on the measured path whose registers were not both read
+     *        this poll is not sampled at all, because integrating power there
+     *        is exactly what the measured path exists to avoid.
      * @param {number|null} reading.power signed watts, positive importing.
      * @param {number} now epoch ms for this reading
      * @returns {{imported: number, exported: number}} Wh, monotonic

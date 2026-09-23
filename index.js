@@ -16,12 +16,32 @@ import { join } from 'path';
 import { mkdirSync } from 'fs';
 import EnvoyClient, { TokenMode } from './src/envoyclient.js';
 import DailyEnergy from './src/dailyenergy.js';
-import MatterEnergyBridge from './src/matterenergy.js';
-import { PluginName, PlatformName, StorageDir, MeasurementKind, SensorNames } from './src/constants.js';
+import MatterEnergyBridge, { hasEnergy } from './src/matterenergy.js';
+import { PluginName, PlatformName, StorageDir, MeasurementKind, SensorNames, ApiUrls } from './src/constants.js';
 
 const DEFAULT_REFRESH_SECONDS = 30;
 const MIN_REFRESH_SECONDS = 5;
 const CONNECT_RETRY_MS = 120_000;
+
+/**
+ * Reads attempted at startup, and the pause between them, before a setup
+ * attempt gives up and waits CONNECT_RETRY_MS for the next.
+ *
+ * What a sensor is registered with is permanent in a way nothing later is: a
+ * sensor left out is missing until the next restart, and a total registered as
+ * zero is charted as the sensor's whole lifetime in one hour once the real one
+ * arrives. A gateway that has just booted, or is busy, misses requests — so a
+ * single bad first read is waited out rather than registered.
+ */
+const STARTUP_READ_ATTEMPTS = 6;
+const STARTUP_READ_RETRY_MS = 10_000;
+
+/**
+ * Startup reads without an answer from /production.json before registering
+ * from `/api/v1/production` alone, which has production only. A gateway that
+ * never answers the first should still get a Solar sensor eventually.
+ */
+const STATS_MISSES_BEFORE_FALLBACK = 12;
 
 /** Watt-hours for the debug log: enough precision to see a counter advance. */
 const wh = (value) => (typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(1)} Wh` : '-');
@@ -198,6 +218,7 @@ class EnvoyEnergyDevice {
 
         this.pollTimer = null;
         this.retryTimer = null;
+        this.startupRetryMs = STARTUP_READ_RETRY_MS;
         this.polling = false;
         this.stopped = false;
     }
@@ -309,7 +330,7 @@ class EnvoyEnergyDevice {
 
             await this.loadDaily();
 
-            const readings = this.readingsByKind(await this.client.readEnergy());
+            const readings = this.readingsByKind(await this.readUntilReady());
             const sensors = this.buildSensors(readings);
             if (sensors.length === 0) {
                 throw new Error('Gateway reported neither production nor consumption');
@@ -318,11 +339,9 @@ class EnvoyEnergyDevice {
             const published = await this.matter.register({ info, sensors });
             if (!published) return;
 
-            // The debug line reports exactly what went out, so it has to follow
-            // what was registered rather than a fixed list of kinds: with a
-            // per-sensor reset in play, two sensors reading the same counters
-            // publish different numbers, and a line naming the wrong one sends
-            // you looking for a fault in the wrong place.
+            // The debug line reports exactly what went out, so it follows what
+            // was registered rather than a fixed list of kinds — Grid and Grid
+            // Export share one reading but publish different halves of it.
             this.publishedKinds = sensors.map((sensor) => sensor.kind);
 
             this.pollTimer = setInterval(() => this.poll(), this.refreshMs);
@@ -332,6 +351,58 @@ class EnvoyEnergyDevice {
             }
             this.retryTimer = setTimeout(() => this.start(), CONNECT_RETRY_MS);
         }
+    }
+
+    /**
+     * Read until the gateway has given a reading worth registering from.
+     *
+     * @returns {Promise<object>} the reading, as EnvoyClient#readEnergy
+     * @throws when it has not after STARTUP_READ_ATTEMPTS, so setup retries
+     */
+    async readUntilReady() {
+        for (let attempt = 1; ; attempt++) {
+            const reading = await this.client.readEnergy();
+            const waitingOn = this.waitingOn(reading);
+            if (!waitingOn) return reading;
+
+            if (attempt >= STARTUP_READ_ATTEMPTS || this.stopped) {
+                throw new Error(`Not publishing yet — ${waitingOn}`);
+            }
+            if (this.logLevel.debug) {
+                this.log.info(`${this.prefix}debug: startup read ${attempt} not ready (${waitingOn}), retrying in ${this.startupRetryMs / 1000} s`);
+            }
+            await new Promise((resolve) => { this.retryTimer = setTimeout(resolve, this.startupRetryMs); });
+        }
+    }
+
+    /**
+     * What a startup reading is still missing, or null when it can be
+     * registered from.
+     *
+     * No answer from /production.json means consumption and grid are
+     * *unknown*, not absent — registering then leaves both sensors out until
+     * the next restart. And a sensor whose lifetime total is not known yet
+     * would open at zero.
+     */
+    waitingOn(reading) {
+        if (!reading.statsRead) {
+            this.statsMisses = (this.statsMisses ?? 0) + 1;
+            if (this.statsMisses < STATS_MISSES_BEFORE_FALLBACK) {
+                return `${ApiUrls.SystemReadingStats} did not answer, and it is the only source of consumption and grid`;
+            }
+        }
+
+        const unknown = [];
+        if (this.productionEnabled && reading.production && !hasEnergy(MeasurementKind.Production, reading.production)) {
+            unknown.push('production');
+        }
+        if (this.consumptionEnabled && reading.consumption && !hasEnergy(MeasurementKind.Consumption, reading.consumption)) {
+            unknown.push('consumption');
+        }
+        if (unknown.length > 0) {
+            return `no lifetime energy yet for ${unknown.join(' and ')}, and registering without it would open the counter at zero`;
+        }
+        return null;
     }
 
     /**
@@ -370,9 +441,8 @@ class EnvoyEnergyDevice {
     }
 
     /**
-     * One reading per sensor kind. Grid import, grid export and the combined
-     * grid endpoint all read the same counters — they differ in which
-     * directions they declare, not in what they measure.
+     * One reading per sensor kind. Grid and Grid Export read the same counters
+     * — they differ in which direction they publish, not in what they measure.
      */
     readingsByKind(reading) {
         return {
@@ -440,8 +510,11 @@ class EnvoyEnergyDevice {
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.pollTimer = null;
         this.retryTimer = null;
+        this.startupRetryMs = STARTUP_READ_RETRY_MS;
     }
 }
+
+export { EnvoyEnergyDevice };
 
 export default (api) => {
     api.registerPlatform(PluginName, PlatformName, EnvoyPlatform);

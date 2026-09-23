@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.16.0] - (23.09.2026)
+
+### Fixed
+
+- **A restart whose first read failed left Consumption and Grid unpublished.** A gateway that has just booted, or is busy, sometimes misses a request. If the first `/production.json` after a restart was that request, the plugin read production from `/api/v1/production` instead, concluded the gateway had no consumption CT, and registered Solar alone — Consumption and Grid stayed missing until the next restart. Startup now retries until `/production.json` answers (six reads ten seconds apart per attempt, then the usual retry), and only settles for production alone from `/api/v1/production` after a dozen misses.
+- **A sensor could open at zero and then chart its whole lifetime as one hour.** When a sensor's lifetime total was not known at registration — the first request missed, or the gateway omitted the total — it was registered at 0 Wh, and the real total (~42 MWh of solar) arrived later as a single bar. Registration now waits for a known total, and a poll that does not know one sends power only, never a zero.
+- **`/api/v1/production` could take over production for the whole run.** It stands in for `/production.json` when a request fails, but if that happened first it became the register production was pinned to, and the CT's was then rejected: Solar stopped counting, and grid energy read that production as having stopped, which is all import. The stand-in is now provisional, like a lines-only reading — held rather than pinned — and holding through it later is routine, so it no longer warns.
+- **A poll with a held register no longer moves the grid counters.** When either register was not read fresh — a missed request, a total the gateway omitted — the grid was differenced against the held value, which reads as the house drawing everything from the utility. The catch-up when readings returned was then refused as implausible, so that phantom import stayed. Such a poll is now skipped outright; the registers keep counting through it, so the next fresh poll carries the whole interval in the right direction.
+- A failed `/production.json` no longer marks the gateway as having no consumption CT, which switched grid energy to integrating power for that poll.
+
+### Added
+
+- A test suite: `npm test` drives the real client against a scripted fake gateway through each of the failures above.
+
 ## [1.15.0] - (10.09.2026)
 
 ### Changed

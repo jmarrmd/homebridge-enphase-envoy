@@ -127,7 +127,7 @@ Setting `"energyDeviceTypes": true` publishes each sensor with the application-c
 |---|---|---|
 | Production | `SolarPower` (0x17) | The spec's PV array type. Declares no clusters of its own — it is a semantic tag. |
 | Consumption | `ElectricalMeter` (0x0514) | "Meters the electrical energy being imported and/or exported." Its mandatory clusters are exactly the two this plugin declares. |
-| Grid | `ElectricalMeter` (0x0514) | The same type, which describes a grid connection more exactly than it does house load. One endpoint declaring both directions, or two declaring one each — see [One sensor or two](#one-sensor-or-two-gridsplit). |
+| Grid / Grid Export | `ElectricalMeter` (0x0514) | The same type, which describes a grid connection more exactly than it does house load. One endpoint per direction — see [The grid sensor](#the-grid-sensor). |
 
 Not `ElectricalUtilityMeter` (0x0511): despite the name it models the utility *account* — its mandatory cluster is `MeterIdentification`, not measurement — so it describes the revenue meter at the service entrance, not house load.
 
@@ -240,7 +240,7 @@ The plugin reads `/production.json?details=1`, which returns production and cons
 
 - **Production** comes from the production CT (`eim`) when one is installed and reporting, otherwise from the microinverters' own reports (`inverters`).
 - **Consumption** comes from the `total-consumption` CT. On a gateway wired for net metering only, house load is reconstructed as `production + net-consumption`.
-- If `/production.json` is unavailable the plugin falls back to `/api/v1/production`, which reports production only.
+- If `/production.json` is unavailable the plugin falls back to `/api/v1/production`, which reports production only. At startup it waits for `/production.json` first, so one missed request does not leave Consumption and Grid unpublished.
 
 Lifetime energy counters are held at their high-water mark, since Matter treats cumulative energy as monotonic and a momentary dip in a gateway reading would otherwise surface as a bogus spike in the Home app.
 

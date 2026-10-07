@@ -24,6 +24,12 @@ const MIN_REFRESH_SECONDS = 5;
 const CONNECT_RETRY_MS = 120_000;
 
 /**
+ * Retry delay after Homebridge refuses registration — typically because the
+ * bridge's Matter server is still starting. Short, because nothing is wrong.
+ */
+const REGISTER_RETRY_MS = 15_000;
+
+/**
  * Reads attempted at startup, and the pause between them, before a setup
  * attempt gives up and waits CONNECT_RETRY_MS for the next.
  *
@@ -219,6 +225,7 @@ class EnvoyEnergyDevice {
         this.pollTimer = null;
         this.retryTimer = null;
         this.startupRetryMs = STARTUP_READ_RETRY_MS;
+        this.registerRetryMs = REGISTER_RETRY_MS;
         this.polling = false;
         this.stopped = false;
     }
@@ -346,10 +353,11 @@ class EnvoyEnergyDevice {
 
             this.pollTimer = setInterval(() => this.poll(), this.refreshMs);
         } catch (error) {
-            if (this.logLevel.error) {
-                this.log.error(`${this.prefix}Setup failed: ${error.message ?? error}. Retrying in ${CONNECT_RETRY_MS / 1000} s.`);
+            const retryMs = error.transient ? this.registerRetryMs : CONNECT_RETRY_MS;
+            if (error.transient ? this.logLevel.warn : this.logLevel.error) {
+                this.log[error.transient ? 'warn' : 'error'](`${this.prefix}Setup failed: ${error.message ?? error}. Retrying in ${retryMs / 1000} s.`);
             }
-            this.retryTimer = setTimeout(() => this.start(), CONNECT_RETRY_MS);
+            this.retryTimer = setTimeout(() => this.start(), retryMs);
         }
     }
 
@@ -511,6 +519,7 @@ class EnvoyEnergyDevice {
         this.pollTimer = null;
         this.retryTimer = null;
         this.startupRetryMs = STARTUP_READ_RETRY_MS;
+        this.registerRetryMs = REGISTER_RETRY_MS;
     }
 }
 

@@ -45,3 +45,33 @@ test('a production total missing at startup delays registration instead of openi
     const solar = api.registered[0].clusters.electricalEnergyMeasurement.cumulativeEnergyExported.energy;
     assert.ok(solar >= CT_LIFETIME * 1000);
 });
+
+test('a registration Homebridge refuses while Matter is starting is retried', async () => {
+    const gateway = await startGateway(() => ({}));
+    const api = fakeApi();
+    const register = api.matter.registerPlatformAccessories;
+    let refusals = 0;
+    api.matter.registerPlatformAccessories = async (...args) => {
+        if (refusals++ === 0) throw new Error('Cannot register Matter accessories yet — the Matter server for this bridge is still starting.');
+        return register(...args);
+    };
+
+    const device = new EnvoyEnergyDevice({
+        config: { name: 'Envoy', host: gateway.host },
+        host: gateway.host, name: 'Envoy', tokenMode: 0,
+        tokenFile: tempFile('token'), gridFile: tempFile('grid.json'), dailyFile: tempFile('daily.json'),
+        log: quietLog, api
+    });
+    device.startupRetryMs = 0;
+    device.registerRetryMs = 0;
+
+    try {
+        await device.start();
+        for (let i = 0; i < 100 && api.registered.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+        assert.deepEqual(api.registered.map((a) => a.displayName), ['Solar', 'Consumption', 'Grid']);
+        assert.ok(device.pollTimer, 'polling started after the retry');
+    } finally {
+        device.stop();
+        await gateway.close();
+    }
+});

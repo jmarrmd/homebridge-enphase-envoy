@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.17.1] - (07.10.2026)
+
+### Fixed
+
+- **Sensors never appeared when Homebridge's Matter server was slower to start than the plugin.** Homebridge refuses registration until the bridge's Matter server is up, and the plugin treated that refusal as final: it logged the error and stopped, with no sensors and no polling until the next restart. A refused registration is now retried every 15 seconds.
+
 ## [1.17.0] - (07.10.2026)
 
 ### Fixed

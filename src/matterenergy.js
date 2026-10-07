@@ -434,7 +434,9 @@ class MatterEnergyBridge {
      * @param {object} device
      * @param {object} device.info      device info from EnvoyClient#connect
      * @param {Array} device.sensors    `[{ kind, displayName, reading }]`
-     * @returns {Promise<boolean>} whether registration succeeded
+     * @returns {Promise<boolean>} false when Matter is unavailable on this
+     *          Homebridge, which no retry will change
+     * @throws when registration itself fails, marked `transient`
      */
     async register({ info, sensors }) {
         const { supported, reason } = this.isSupported();
@@ -488,9 +490,15 @@ class MatterEnergyBridge {
             accessories.forEach((accessory) => this.reportOpeningEnergy(accessory));
             return true;
         } catch (error) {
-            this.log.error(`${this.prefix}Failed to register Matter accessories: ${error.message ?? error}`);
+            // Homebridge refuses registration while the bridge's Matter server
+            // is still starting, which a fast startup can easily beat. That is
+            // transient, so it is thrown for the caller to retry rather than
+            // reported as final — returning false here used to leave the
+            // plugin running with no sensors and no polling until a restart.
             this.sensors.clear();
-            return false;
+            const failure = new Error(`Failed to register Matter accessories: ${error.message ?? error}`);
+            failure.transient = true;
+            throw failure;
         }
     }
 

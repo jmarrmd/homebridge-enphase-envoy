@@ -42,6 +42,13 @@ const PROVISIONAL_PIN_AFTER = 10;
  */
 const FALLBACK_SOURCE = 'fallback';
 
+/**
+ * The energy source name for house load rebuilt as production plus the
+ * consumption meter, used when the gateway reports one meter under both
+ * consumption names — see parseConsumption().
+ */
+const CONSUMPTION_REBUILT = 'rebuilt';
+
 /** Token generation modes, mirroring the values used by the config schema. */
 export const TokenMode = {
     None: 0,        // firmware < v7 — no token
@@ -618,6 +625,17 @@ class EnvoyClient extends EventEmitter {
      * Home consumption is the "total-consumption" CT when the gateway has one.
      * A gateway wired for net metering only reports "net-consumption" (what
      * crosses the meter), so reconstruct the house load as production + net.
+     *
+     * A gateway can also report both entries and mean only one of them: when
+     * the consumption CT sits at the service entrance but is configured as
+     * "total-consumption" (Enphase's "Load only"), the gateway publishes that
+     * one meter's reading under both names, identical to the watt-hour. It is
+     * grid flow, not house load — observed on a live gateway whose setting
+     * changed underneath it, where Consumption and Grid suddenly read the same
+     * and the consumption lifetime fell by the whole production lifetime. That
+     * is detected (sameRegister) and house load is rebuilt as production plus
+     * the meter's reading, which is what the gateway reports when configured
+     * correctly. Grid is then the meter itself, exactly as before.
      */
     parseConsumption(stats, production) {
         // No answer is not the same as no consumption CT. Leave what is known
@@ -625,11 +643,24 @@ class EnvoyClient extends EventEmitter {
         if (!stats) return null;
 
         const entries = Array.isArray(stats?.consumption) ? stats.consumption : [];
-
         const total = entries.find((entry) => entry?.measurementType === 'total-consumption');
-        if (total) {
+        const net = entries.find((entry) => entry?.measurementType === 'net-consumption');
+
+        const collapsed = !!total && !!net && this.sameRegister(total, net);
+        this.reportCollapsedConsumption(collapsed);
+
+        if (total && !collapsed) {
             this.consumptionMeasured = true;
             return this.toReading(total, 'total-consumption');
+        }
+
+        if (collapsed) {
+            // Consumption minus production is the meter's own register here,
+            // which is the quantity the measured grid path has always
+            // differenced on a correctly configured gateway, so it stays on
+            // that path rather than integrating power.
+            this.consumptionMeasured = true;
+            return production ? this.reconstructConsumption(production, net, CONSUMPTION_REBUILT) : null;
         }
 
         // Reconstructed rather than measured. Grid energy cannot be derived from
@@ -638,17 +669,60 @@ class EnvoyClient extends EventEmitter {
         // been able to verify. readGrid() integrates power instead.
         this.consumptionMeasured = false;
 
-        const net = entries.find((entry) => entry?.measurementType === 'net-consumption');
         if (!net || !production) return null;
+        return this.reconstructConsumption(production, net, 'derived');
+    }
 
+    /** House load as production plus what crossed the service entrance. */
+    reconstructConsumption(production, net, source) {
         const netReading = this.toReading(net, 'net-consumption');
         return {
             power: this.addOrNull(production.power, netReading.power),
             energyLifetime: this.addOrNull(production.energyLifetime, netReading.energyLifetime),
-            energySource: 'derived',
+            energySource: source,
             voltage: netReading.voltage,
             current: null
         };
+    }
+
+    /**
+     * Whether the gateway is reporting one meter under both consumption names.
+     * On a correctly configured gateway the two lifetimes differ by the whole
+     * production lifetime, so equal lifetimes cannot be a coincidence.
+     */
+    sameRegister(total, net) {
+        const a = num(total.whLifetime);
+        const b = num(net.whLifetime);
+        return isNumber(a) && isNumber(b) && a > 0 && Math.abs(a - b) < 1;
+    }
+
+    /**
+     * Say when the gateway starts or stops reporting one meter as both, and
+     * move the consumption pin with it. Rebuilding house load reads a
+     * different register on purpose; without re-pinning, pinEnergySource()
+     * would rightly refuse it as a switch.
+     *
+     * Both directions are close to continuous: a correctly configured gateway
+     * reports total-consumption as net plus production, which is the rebuilt
+     * value. Only a Homebridge restart while the setting was wrong leaves the
+     * published total at the meter's own, smaller value, and the rebuild then
+     * steps it up once.
+     */
+    reportCollapsedConsumption(collapsed) {
+        if (collapsed === this.consumptionCollapsed) return;
+        const first = this.consumptionCollapsed === undefined;
+        this.consumptionCollapsed = collapsed;
+
+        if (this.energySource[MeasurementKind.Consumption]) {
+            this.energySource[MeasurementKind.Consumption] = collapsed ? CONSUMPTION_REBUILT : 'total-consumption';
+            this.warnedEnergySource[MeasurementKind.Consumption] = false;
+        }
+
+        if (collapsed) {
+            this.emit('warn', 'The gateway is reporting total-consumption and net-consumption as the same reading. Its consumption meter is measuring grid flow but is configured as "total-consumption" (Load only) — the setting should be "net-consumption" (Load with Solar), which an installer or Enphase support can change. Until then, Consumption is rebuilt here as production plus that meter, which is what a correctly configured gateway reports, and Grid is the meter itself.');
+        } else if (!first) {
+            this.emit('info', 'The gateway is reporting total-consumption and net-consumption separately again. Consumption is the gateway\'s own total-consumption reading once more.');
+        }
     }
 
     /** /api/v1/production — production only, available on every firmware. */

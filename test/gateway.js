@@ -20,9 +20,16 @@ export const EXPORT_PER_POLL = PRODUCTION_PER_POLL - CONSUMPTION_PER_POLL;
 
 export const CT_LIFETIME = 42_545_000;
 export const INVERTER_LIFETIME = 81_400_000;
+export const NET_LIFETIME = 16_453_562;
 
-/** /production.json for poll n. */
-export function stats(n, { omitTotal = false } = {}) {
+/**
+ * /production.json for poll n.
+ *
+ * `collapsed` reports the service-entrance meter under both consumption names,
+ * which is what a gateway does when that meter is configured as
+ * "total-consumption" (Load only) while it actually measures grid flow.
+ */
+export function stats(n, { omitTotal = false, collapsed = false } = {}) {
     const eim = {
         type: 'eim', activeCount: 1, measurementType: 'production', wNow: 5000,
         whLifetime: CT_LIFETIME + PRODUCTION_PER_POLL * n,
@@ -33,15 +40,19 @@ export function stats(n, { omitTotal = false } = {}) {
     };
     if (omitTotal) delete eim.whLifetime;
 
+    // A correctly configured gateway reports total-consumption as net plus
+    // production, so the two lifetimes here differ by exactly the CT's.
+    const net = { type: 'eim', measurementType: 'net-consumption', wNow: -3000, whLifetime: NET_LIFETIME - EXPORT_PER_POLL * n, lines: [] };
+    const total = collapsed
+        ? { ...net, measurementType: 'total-consumption' }
+        : { type: 'eim', measurementType: 'total-consumption', wNow: 2000, whLifetime: NET_LIFETIME + CT_LIFETIME + CONSUMPTION_PER_POLL * n, lines: [] };
+
     return {
         production: [
             { type: 'inverters', activeCount: 22, wNow: 5000, whLifetime: INVERTER_LIFETIME + PRODUCTION_PER_POLL * n },
             eim
         ],
-        consumption: [
-            { type: 'eim', measurementType: 'total-consumption', wNow: 2000, whLifetime: 60_000_000 + CONSUMPTION_PER_POLL * n, lines: [] },
-            { type: 'eim', measurementType: 'net-consumption', wNow: -3000, whLifetime: 17_455_000 - EXPORT_PER_POLL * n, lines: [] }
-        ]
+        consumption: [total, net]
     };
 }
 

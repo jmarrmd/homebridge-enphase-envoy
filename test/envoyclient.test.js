@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import EnvoyClient from '../src/envoyclient.js';
 import {
     startGateway, tempFile, withClock,
-    CT_LIFETIME, PRODUCTION_PER_POLL, EXPORT_PER_POLL
+    CT_LIFETIME, NET_LIFETIME, PRODUCTION_PER_POLL, CONSUMPTION_PER_POLL, EXPORT_PER_POLL
 } from './gateway.js';
 
 /** Poll a scripted gateway `polls` times at 30 s spacing. */
@@ -96,4 +96,41 @@ test('a gateway that only ever answers the fallback settles on it', async () => 
     assert.equal(readings[8].production.energyLifetime, null);
     assert.equal(typeof readings[9].production.energyLifetime, 'number');
     assert.ok(readings.every((r) => r.consumption === null && r.grid === null));
+});
+
+/** House load a correctly configured gateway would report for poll n. */
+const trueConsumption = (n) => NET_LIFETIME + CT_LIFETIME + CONSUMPTION_PER_POLL * n;
+
+test('one meter reported under both consumption names is rebuilt as house load', async () => {
+    const { client, readings, warnings } = await run(() => ({ collapsed: true }));
+
+    for (const [n, r] of readings.entries()) {
+        assert.equal(r.consumption.power, 2000, 'house load is production plus the meter, not the meter');
+        assert.ok(Math.abs(r.consumption.energyLifetime - trueConsumption(n)) < 0.01);
+        assert.equal(r.grid.power, -3000, 'grid is the meter itself');
+    }
+    assert.equal(client.energySource.consumption, 'rebuilt');
+    assert.equal(warnings.filter((w) => w.includes('same reading')).length, 1, 'said once');
+    assertGridTruth(readings, 19);
+});
+
+test('a gateway whose consumption setting changes mid-run carries on without a step', async () => {
+    const { readings, warnings } = await run((n) => ({ collapsed: n >= 8 }));
+
+    for (const [n, r] of readings.entries()) {
+        assert.ok(Math.abs(r.consumption.energyLifetime - trueConsumption(n)) < 0.01, `poll ${n}: ${r.consumption.energyLifetime}`);
+        assert.equal(r.consumption.power, 2000);
+    }
+    assert.ok(!warnings.some((w) => w.includes('instead of')), 'the deliberate switch is not refused by the pin');
+    assertGridTruth(readings, 19);
+});
+
+test('a gateway that is fixed goes back to its own total-consumption', async () => {
+    const { client, readings } = await run((n) => ({ collapsed: n < 8 }));
+
+    assert.equal(client.energySource.consumption, 'total-consumption');
+    for (const [n, r] of readings.entries()) {
+        assert.ok(Math.abs(r.consumption.energyLifetime - trueConsumption(n)) < 0.01, `poll ${n}`);
+    }
+    assertGridTruth(readings, 19);
 });

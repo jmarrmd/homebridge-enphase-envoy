@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For `homebridge-enphase-envoy-matter` use Homebridge >= v2.4.0 with Matter enabled on the plugin's child bridge
 - **Status:** `energyDeviceTypes` and all three sensors are confirmed working on an iOS 27 beta (August 2026). The grid sensor appears in Electricity Usage with hourly resolution once it has a day of history; it is absent until then, which looks like a device-type problem but is not. Production appears as its own device in the Home app's Electricity Usage screen with its energy counted as exported — a day of pure generation reads `NET USAGE -32kWh / GRID USE 0kWh / EXPORTED 32kWh`. Earlier entries below describe it as unconfirmed; that was accurate when written.
 
+## [1.17.0] - (07.10.2026)
+
+### Fixed
+
+- **A gateway reporting one meter as both consumption and grid.** When the consumption CT sits at the service entrance but is configured as `total-consumption` ("Load only") instead of `net-consumption` ("Load with Solar"), the gateway publishes that one meter's reading under both names, identical to the watt-hour. Consumption and Grid then showed the same watts while the array was producing, and the consumption lifetime fell by the whole production lifetime — which the plugin, refusing to let a counter run backwards, held flat, so the graphs stopped. Observed on a live gateway whose setting changed with no one touching it.
+
+  The plugin now detects it (the two lifetimes are equal, where a correctly configured gateway's differ by the entire production lifetime), warns once with what to ask an installer to change, and rebuilds Consumption as production plus that meter — the value a correctly configured gateway reports. Grid is the meter itself, as it always was. If the setting is corrected, it goes back to the gateway's own total-consumption by itself. Either switch is continuous while Homebridge keeps running; a restart while the setting is wrong will have published the smaller figure, and the rebuild then steps Consumption up once.
+
 ## [1.16.0] - (23.09.2026)
 
 ### Fixed
